@@ -1,0 +1,69 @@
+services:
+  # ─── MongoDB Database ──────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: trading_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: trading_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - trading_network
+
+  # ─── Trading Agent ─────────────────────────────────────────
+  trading-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading_agent
+    restart: unless-stopped
+    environment:
+      # ─── Revolut X API ───────────────────────────────────────
+      REVOLUT_API_KEY: ${REVOLUT_API_KEY}
+      REVOLUT_PRIVATE_KEY_PATH: ${REVOLUT_PRIVATE_KEY_PATH}
+      REVOLUT_BASE_URL: ${REVOLUT_BASE_URL}
+      
+      # ─── Anthropic Claude ────────────────────────────────────
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL}
+      
+      # ─── Telegram Bot ────────────────────────────────────────
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      
+      # ─── Trading Config ──────────────────────────────────────
+      TRADING_PAIRS: ${TRADING_PAIRS:-BTC/USD,ETH/USD,SOL/USD}
+      MAX_TRADE_SIZE: ${MAX_TRADE_SIZE}
+      CRON_ENABLED: ${CRON_ENABLED:-false}
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-*/15 * * * *}
+      DRY_RUN: ${DRY_RUN:-false}
+      DEBUG_API: ${DEBUG_API:-false}
+      
+      # ─── MongoDB Connection ──────────────────────────────────
+      MONGO_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/trading_db?authSource=admin
+      MONGODB_DB: ${MONGODB_DB:-revolut-trading-agent}
+    volumes:
+      - ./src:/app/src
+      - ./keys:/app/keys
+      - ./logs:/app/logs
+      - ./.env:/app/.env
+    networks:
+      - trading_network
+
+networks:
+  trading_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local

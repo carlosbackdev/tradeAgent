@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+README.md
+.env
+logs/
+.dockerignore
+Dockerfile
+docker-compose.yml
+docs/
+node_modules/
+package-lock.json
+*.md
+.DS_Store
+test-*.js
+

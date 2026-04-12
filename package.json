@@ -1,0 +1,39 @@
+{
+  "name": "revolut-trading-agent",
+  "version": "1.0.0",
+  "description": "Autonomous crypto trading agent powered by Claude AI for Revolut X",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "trigger": "node src/index.js --trigger manual",
+    "gen-keys": "node scripts/generate-keys.js",
+    "test:flow": "node test-order-flow.js",
+    "verify": "node scripts/verify-setup.js"
+  },
+  "keywords": [
+    "crypto",
+    "trading",
+    "bot",
+    "ai",
+    "revolut",
+    "claude",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "node-cron": "^3.0.3",
+    "technicalindicators": "^3.1.0",
+    "dotenv": "^16.4.5",
+    "mongodb": "^6.3.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
