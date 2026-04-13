@@ -18,5 +18,5 @@ export function buildAnalyzerMessage(context) {
     },
   };
 
-  return analysisData;
+  return JSON.stringify(analysisData, null, 2);
 }
