@@ -1,6 +1,6 @@
 /**
  * revolut/market.js
- * Real market data from Revolut X only.
+ * Real market data from Revolut X.
  */
 
 import { logger } from '../utils/logger.js';
@@ -24,38 +24,45 @@ export class MarketData {
   }
 
   /**
-   * Get ticker from Revolut X.
-   * Docs show ticker response entries with symbol like BTC/USD.
+   * Get ticker data.
+   * Ticker symbols are documented like BTC/USD. :contentReference[oaicite:2]{index=2}
    */
-  async getTicker(symbol) {
-    const res = await this.client.get('/market-data/ticker', {
-      symbols: symbol,
-    });
+async getTicker(symbol) {
+  const dashed = this._toDashedSymbol(symbol);
 
-    const item = res?.data?.find?.(t => t.symbol === symbol) || res?.data?.[0];
-    if (!item) {
-      throw new Error(`No ticker returned for ${symbol}`);
-    }
+  const res = await this.client.get('/tickers', {
+    symbols: dashed,
+  });
 
-    return {
-      symbol: item.symbol,
-      bid: this._safeNum(item.bid),
-      ask: this._safeNum(item.ask),
-      mid: this._safeNum(item.mid),
-      last: this._safeNum(item.last_price),
-      timestamp: item?.metadata?.timestamp || Date.now(),
-    };
+  const item =
+    res?.data?.find?.(t => t.symbol === dashed || t.symbol === symbol) ||
+    res?.data?.[0];
+
+  logger.debug(`Ticker ${symbol}: ${JSON.stringify(item)}`);
+
+  if (!item) {
+    throw new Error(`No ticker returned for ${symbol}`);
   }
 
+  return {
+    symbol,
+    bid: this._safeNum(item.bid),
+    ask: this._safeNum(item.ask),
+    mid: this._safeNum(item.mid),
+    last: this._safeNum(item.last_price),
+    timestamp: res?.metadata?.timestamp || Date.now(),
+  };
+}
+
   /**
-   * Real order book snapshot.
-   * Docs use path param symbol like BTC-USD and limit 1..20.
+   * Authenticated order book snapshot.
+   * Your docs show /order-book/{symbol}
    */
   async getOrderBook(symbol, depth = 10) {
     const dashed = this._toDashedSymbol(symbol);
     const limit = Math.min(Math.max(depth, 1), 20);
 
-    const res = await this.client.get(`/market-data/order-book/${dashed}`, { limit });
+    const res = await this.client.get(`/order-book/${dashed}`, { limit });
     const data = res?.data;
 
     if (!data) {
@@ -64,43 +71,42 @@ export class MarketData {
 
     const normalizeLevel = (level) => ({
       price: this._safeNum(level.p ?? level.price),
-      size: this._safeNum(level.a ?? level.amount ?? level.size),
+      size: this._safeNum(level.q ?? level.size),
       side: level.s ?? null,
       assetId: level.aid ?? null,
       assetName: level.anm ?? null,
+      venue: level.ve ?? null,
+      orders: this._safeNum(level.no ?? 0),
+      timestamp: level.pdt ?? null,
     });
 
     return {
       symbol,
       bids: Array.isArray(data.bids) ? data.bids.map(normalizeLevel) : [],
       asks: Array.isArray(data.asks) ? data.asks.map(normalizeLevel) : [],
-      timestamp: data?.metadata?.timestamp || Date.now(),
+      timestamp: res?.metadata?.timestamp || Date.now(),
     };
   }
 
   /**
-   * Real historical candles from Revolut X.
-   * Use these closes for RSI/MACD/Bollinger/EMA.
+   * Historical OHLCV candles.
+   * Your docs show /candles/{symbol} with params: interval, from, to
    */
   async getCandles(symbol, {
-    interval = '1h',
-    limit = 120,
-    endDateMs,
-    startDateMs,
+    interval = 5,
+    fromMs,
+    toMs,
   } = {}) {
     const dashed = this._toDashedSymbol(symbol);
+    logger.info(`Fetching candles for ${symbol} | interval=${interval}`);
 
-    const end = endDateMs ?? Date.now();
+    const to = toMs ?? Date.now();
+    const from = fromMs ?? (to - (120 * interval * 60 * 1000));
 
-    // Fallback simple range if caller doesn't provide one.
-    // 120 candles of 1h ~= 5 days.
-    const start = startDateMs ?? (end - (limit * 60 * 60 * 1000));
-
-    const res = await this.client.get(`/market-data/candles/${dashed}`, {
+    const res = await this.client.get(`/candles/${dashed}`, {
       interval,
-      start_date: start,
-      end_date: end,
-      limit,
+      from,
+      to,
     });
 
     const candles = Array.isArray(res?.data) ? res.data : [];
@@ -109,44 +115,44 @@ export class MarketData {
       symbol,
       interval,
       candles: candles.map(c => ({
-        timestamp: c.tdt ?? c.timestamp,
-        open: this._safeNum(c.o ?? c.open),
-        high: this._safeNum(c.h ?? c.high),
-        low: this._safeNum(c.l ?? c.low),
-        close: this._safeNum(c.c ?? c.close),
-        volume: this._safeNum(c.v ?? c.volume),
+        timestamp: c.start,
+        open: this._safeNum(c.open),
+        high: this._safeNum(c.high),
+        low: this._safeNum(c.low),
+        close: this._safeNum(c.close),
+        volume: this._safeNum(c.volume),
       })),
     };
   }
 
   /**
-   * Optional: public market trades.
-   * Useful for inspection, but indicators should use candles.
+   * Public last trades.
+   * Your docs show /public/last-trades without symbol in path.
+   * Filter locally by pair if needed.
    */
-  async getPublicTrades(symbol, {
-    limit = 200,
-    endDateMs,
-    startDateMs,
-  } = {}) {
-    const dashed = this._toDashedSymbol(symbol);
-    const end = endDateMs ?? Date.now();
-    const start = startDateMs ?? (end - 24 * 60 * 60 * 1000);
+  async getPublicTrades(symbol = null) {
+    const res = await this.client.get('/public/last-trades');
+    const trades = Array.isArray(res?.data) ? res.data : [];
 
-    const res = await this.client.get(`/trades/${dashed}`, {
-      start_date: start,
-      end_date: end,
-      limit,
-    });
+    const filtered = symbol
+      ? trades.filter(t => {
+          const pair = `${t.aid}/${t.pc}`;
+          return pair === symbol;
+        })
+      : trades;
 
     return {
       symbol,
-      trades: Array.isArray(res?.data) ? res.data.map((t, i) => ({
-        id: t.id ?? `trade-${i}`,
-        price: this._safeNum(t.p ?? t.price),
-        size: this._safeNum(t.a ?? t.amount ?? t.size),
-        side: t.s ?? null,
-        timestamp: t.tdt ?? t.timestamp,
-      })) : [],
+      trades: filtered.map((t, i) => ({
+        id: t.tid ?? `trade-${i}`,
+        price: this._safeNum(t.p),
+        size: this._safeNum(t.q),
+        base: t.aid ?? null,
+        quote: t.pc ?? null,
+        side: null,
+        timestamp: t.tdt ?? t.pdt ?? null,
+      })),
+      timestamp: res?.metadata?.timestamp || null,
     };
   }
 
@@ -154,7 +160,7 @@ export class MarketData {
     const [ticker, orderBook, candles] = await Promise.all([
       this.getTicker(symbol),
       this.getOrderBook(symbol, 10),
-      this.getCandles(symbol, { interval: '1h', limit: 120 }),
+      this.getCandles(symbol, { interval: process.env.INDICATORS_CANDLES_INTERVAL || 5 }),
     ]);
 
     logger.info(`📊 Snapshot loaded: ${symbol} | candles=${candles.candles.length}`);
@@ -173,23 +179,21 @@ export class MarketData {
   }
 
   async getOpenOrders(symbols = []) {
+    const dashedSymbols = symbols.map(symbol => this._toDashedSymbol(symbol));
+    
     return this.client.get('/orders/active', {
-      symbols: symbols.length ? symbols.join(',') : undefined,
+      symbols: dashedSymbols.length ? dashedSymbols.join(',') : undefined,
     });
   }
 
-  async getTradeHistory(symbol, {
-    startDateMs,
-    endDateMs,
-    limit = 100,
-  } = {}) {
+  async getTradeHistory(symbol, { fromMs, toMs, limit = 100 } = {}) {
     const dashed = this._toDashedSymbol(symbol);
-    const end = endDateMs ?? Date.now();
-    const start = startDateMs ?? (end - 7 * 24 * 60 * 60 * 1000);
+    const to = toMs ?? Date.now();
+    const from = fromMs ?? (to - 7 * 24 * 60 * 60 * 1000);
 
-    return this.client.get(`/trades/private/${dashed}`, {
-      start_date: start,
-      end_date: end,
+    return this.client.get(`/trades/${dashed}`, {
+      from,
+      to,
       limit,
     });
   }

@@ -22,7 +22,11 @@ export const config = {
     minOrderUsd: parseFloat(process.env.MIN_ORDER || '50'),
   },
   cron: {
+    enabled: process.env.CRON_ENABLED,
     schedule: process.env.CRON_SCHEDULE || '*/15 * * * *',
+  },
+  indicatos: {
+    candlesInterval: parseInt(process.env.INDICATORS_CANDLES_INTERVAL), // in minutes
   },
   debug: {
     dryRun: process.env.DRY_RUN === 'true',

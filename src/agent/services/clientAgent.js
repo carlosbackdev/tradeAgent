@@ -6,6 +6,9 @@
 import { SYSTEM_PROMPT } from '../context/prompt.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildAnalyzerMessage } from '../context/analyzer-market.js';
+import { logger } from '../../utils/logger.js';
+import { JSONLDecoder } from '@anthropic-ai/sdk/internal/decoders/jsonl.mjs';
+
 
 export const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 

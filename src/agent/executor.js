@@ -114,22 +114,28 @@ export async function runAgentCycle(triggerReason = 'cron') {
       recentCloses: (snapshot.candles?.candles || []).slice(-10).map(c => c.close),
       fetchedAt: snapshot.fetchedAt,
     }));
-    const relevantBalances = extractRelevantBalances(balances, pairs);
+
+    const relevantBalances = extractRelevantBalances(balances);
+
+    // Extract open orders array (handle both formats)
+    const openOrdersArray = Array.isArray(openOrders?.data) 
+      ? openOrders.data 
+      : (Array.isArray(openOrders) ? openOrders : []);
 
     const analyzerContext = {
       balances: relevantBalances,
-      openOrders: Array.isArray(openOrders?.data) ? openOrders.data.length : (openOrders?.length || 0),
+      openOrders: openOrdersArray,
       pairs: compactPairs,
       indicators,
       previousDecisions: previousDecisionsBySymbol,
     };
 
-    logger.info('🧠 Sending context to Claude...');
-    logger.debug('Context:', JSON.stringify(analyzerContext, null, 2));
     let decision;
     try {
       decision = await callAgentAnalyzer(analyzerContext);
+      
       logger.info('✅ Claude decision received');
+
       logger.debug('Decision:', JSON.stringify(decision, null, 2));
     } catch (err) {
       throw new Error(`Claude analysis failed: ${err.message}`);
@@ -289,18 +295,21 @@ export async function runAgentCycle(triggerReason = 'cron') {
  * Extract only the balances relevant to the current trading pairs.
  * Avoids sending the entire balances object (could be large) to Claude.
  */
-function extractRelevantBalances(balances, pairs) {
+function extractRelevantBalances(balances) {
   if (!balances) return {};
-  const relevant = {};
+  const balancesMap = {};
 
-  // Always include USD
-  if (balances.USD !== undefined) relevant.USD = balances.USD;
+  // Handle both array and {data: []} formats
+  const balanceArray = Array.isArray(balances) ? balances : (balances?.data || []);
 
-  // Include base asset of each pair (BTC, ETH, etc.)
-  for (const pair of pairs) {
-    const base = pair.split('/')[0];
-    if (balances[base] !== undefined) relevant[base] = balances[base];
+  for (const b of balanceArray) {
+    const total = Number(b.total || 0);
+
+    // ignorar balances vacíos
+    if (total === 0) continue;
+
+    balancesMap[b.currency] = total;
   }
 
-  return relevant;
+  return balancesMap;
 }

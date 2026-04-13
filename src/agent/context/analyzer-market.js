@@ -3,28 +3,20 @@
  */
 
 export function buildAnalyzerMessage(context) {
-  return `
-UTC: ${new Date().toISOString()}
+  // Build a proper JSON structure that Claude can parse easily
+  const analysisData = {
+    timestamp: new Date().toISOString(),
+    balances: context.balances || {},
+    openOrders: Array.isArray(context.openOrders) ? context.openOrders : [],
+    marketData: context.pairs || [],
+    indicators: context.indicators || {},
+    previousDecisions: context.previousDecisions || {},
+    constraints: {
+      MAX_TRADE_SIZE: parseFloat(process.env.MAX_TRADE_SIZE || '1'),
+      MIN_ORDER: parseFloat(process.env.MIN_ORDER || '5'),
+      DRY_RUN: process.env.DRY_RUN === 'true',
+    },
+  };
 
-BALANCES:
-${JSON.stringify(context.balances, null, 2)}
-
-OPEN ORDERS COUNT: ${context.openOrders}
-
-MARKET DATA:
-${JSON.stringify(context.pairs, null, 2)}
-
-INDICATORS:
-${JSON.stringify(context.indicators, null, 2)}
-
-PREVIOUS DECISIONS:
-${Object.keys(context.previousDecisions || {}).length > 0
-  ? JSON.stringify(context.previousDecisions, null, 2)
-  : 'None — first analysis.'}
-
-CONSTRAINTS:
-MAX_TRADE_SIZE=${process.env.MAX_TRADE_SIZE},
-MIN_ORDER=${process.env.MIN_ORDER},
-DRY_RUN=${process.env.DRY_RUN}
-`.trim();
+  return analysisData;
 }

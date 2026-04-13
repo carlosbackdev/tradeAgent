@@ -30,6 +30,7 @@ let cronEnabled  = process.env.CRON_ENABLED  === 'true';
 
 // ── Update offset for long polling ───────────────────────────────
 let updateOffset = 0;
+let isPolling = false;  // Prevent concurrent polling
 
 // ── Config edit state (per-user, single user bot) ─────────────────
 const configState = { isConfiguring: false, selectedKey: null };
@@ -48,7 +49,7 @@ const EDITABLE_CONFIG = [
   'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
   'TRADING_PAIRS', 'MAX_TRADE_SIZE', 'MIN_ORDER',
   'CRON_ENABLED', 'CRON_SCHEDULE',
-  'DRY_RUN', 'DEBUG_API',
+  'DRY_RUN', 'DEBUG_API','INDICATORS_CANDLES_INTERVAL'
 ];
 
 // ── Cron presets ──────────────────────────────────────────────────
@@ -474,58 +475,67 @@ async function getUpdates() {
 }
 
 async function processUpdates() {
-  const updates = await getUpdates();
+  if (isPolling) return;  // Skip if already polling
+  isPolling = true;
+  
+  try {
+    const updates = await getUpdates();
 
-  for (const update of updates) {
-    updateOffset = update.update_id + 1;
+    for (const update of updates) {
+      updateOffset = update.update_id + 1;
 
-    try {
-      // ── Text messages ───────────────────────────────────────────
-      if (update.message?.text) {
-        const full = update.message.text.trim();
-        const [cmd, ...argParts] = full.split(' ');
-        const args = argParts.join(' ');
-        const command = cmd.toLowerCase();
+      try {
+        // ── Text messages ───────────────────────────────────────────
+        if (update.message?.text) {
+          const full = update.message.text.trim();
+          const [cmd, ...argParts] = full.split(' ');
+          const args = argParts.join(' ');
+          const command = cmd.toLowerCase();
 
-        if (configState.isConfiguring && !command.startsWith('/')) {
-          await handleConfigInput(full);
-          continue;
+          if (configState.isConfiguring && !command.startsWith('/')) {
+            await handleConfigInput(full);
+            continue;
+          }
+
+          switch (command) {
+            case '/start':         await handleStart();            break;
+            case '/help':          await handleHelp();             break;
+            case '/status':        await handleStatus();           break;
+            case '/trigger':       await handleHelp();             break;
+            case '/configuration': await handleConfiguration();    break;
+            case '/cron':          await handleCron(args);         break;
+            case '/cron_on':       await handleCron('on');         break;
+            case '/cron_off':      await handleCron('off');        break;
+            case '/cron_5m':        await handleCron('*/5 * * * *'); break;
+            case '/cron_15m':       await handleCron('*/15 * * * *');break;
+            case '/cron_1h':        await handleCron('0 * * * *');   break;
+            case '/cron_4h':        await handleCron('0 */4 * * *'); break;
+            case '/btc':           await handleCoinCommand('BTC'); break;
+            case '/eth':           await handleCoinCommand('ETH'); break;
+            case '/sol':           await handleCoinCommand('SOL'); break;
+            case '/venice':        await handleCoinCommand('VENICE'); break;
+            case '/xrp':           await handleCoinCommand('XRP'); break;
+            default:
+              await sendMessage('❓ Comando no reconocido. Usa /help');
+          }
         }
 
-        switch (command) {
-          case '/start':         await handleStart();            break;
-          case '/help':          await handleHelp();             break;
-          case '/status':        await handleStatus();           break;
-          case '/trigger':       await handleHelp();             break;
-          case '/configuration': await handleConfiguration();    break;
-          case '/cron':          await handleCron(args);         break;
-          case '/cron_on':       await handleCron('on');         break;
-          case '/cron_off':      await handleCron('off');        break;
-          case '/cron_5m':        await handleCron('*/5 * * * *'); break;
-          case '/cron_15m':       await handleCron('*/15 * * * *');break;
-          case '/cron_1h':        await handleCron('0 * * * *');   break;
-          case '/cron_4h':        await handleCron('0 */4 * * *'); break;
-          case '/btc':           await handleCoinCommand('BTC'); break;
-          case '/eth':           await handleCoinCommand('ETH'); break;
-          case '/sol':           await handleCoinCommand('SOL'); break;
-          case '/venice':        await handleCoinCommand('VENICE'); break;
-          case '/xrp':           await handleCoinCommand('XRP'); break;
-          default:
-            await sendMessage('❓ Comando no reconocido. Usa /help');
+        // ── Callbacks ────────────────────────────────────────────────
+        if (update.callback_query) {
+          const { id, data, message } = update.callback_query;
+          await handleCallback(id, data, message?.message_id);
         }
-      }
 
-      // ── Callbacks ────────────────────────────────────────────────
-      if (update.callback_query) {
-        const { id, data, message } = update.callback_query;
-        await handleCallback(id, data, message?.message_id);
-      }
-
-    } catch (err) {
-      if (!err.message?.includes('409')) {
-        logger.error('Error processing update:', err.message);
+      } catch (err) {
+        if (!err.message?.includes('409')) {
+          logger.error('Error processing update:', err.message);
+        }
       }
     }
+  } catch (err) {
+    logger.error('Error in processUpdates:', err.message);
+  } finally {
+    isPolling = false;
   }
 }
 
@@ -554,8 +564,16 @@ export async function startTelegramBot() {
     `/start para ver comandos`
   ).catch(() => {});
 
-  // Long poll every 3 seconds
-  setInterval(processUpdates, 3000);
+  // Sequential long polling (waits for each cycle to complete before starting next)
+  const startPolling = async () => {
+    while (true) {
+      await processUpdates();
+      // Small delay to prevent tight loop and rate limiting
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  };
+
+  startPolling().catch(err => logger.error('Polling loop error:', err));
 }
 
 export { startCron, stopCron, getCronStatus };
