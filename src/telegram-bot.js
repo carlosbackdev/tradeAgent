@@ -1,441 +1,571 @@
 /**
  * src/telegram-bot.js
- * Telegram bot to trigger trades on demand
- * Commands:
- *   /trigger - Show coin menu and run one cycle
- *   /status - Show current config and last trade
- *   /configuration - Edit all configuration variables
- *   /help - Show available commands
+ * Telegram bot with long-polling.
+ *
+ * New in this version:
+ *   /cron            — show cron status + inline keyboard to enable/disable/change schedule
+ *   /cron <expr>     — set a new cron expression (e.g. /cron 0 * * * *)
+ *   /cron on|off     — enable or disable cron without changing schedule
+ *
+ * All cron state is managed here and exported so index.js can read it.
  */
 
 import 'dotenv/config';
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import cron from 'node-cron';
 import { runAgentCycle } from './agent/executor.js';
 import { logger } from './utils/logger.js';
+import { CronParse } from './utils/formatter.js';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const UPDATE_OFFSET = {};
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ENV_PATH = path.join(process.cwd(), '.env');
+const CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
+const ENV_PATH  = path.join(process.cwd(), '.env');
 
-// Estado temporal para configuración
-const configState = {};
+// ── Cron state (module-level singleton) ──────────────────────────
+let cronTask     = null;   // node-cron scheduled task
+let cronSchedule = process.env.CRON_SCHEDULE || '*/15 * * * *';
+let cronEnabled  = process.env.CRON_ENABLED  === 'true';
+
+// ── Update offset for long polling ───────────────────────────────
+let updateOffset = 0;
+
+// ── Config edit state (per-user, single user bot) ─────────────────
+const configState = { isConfiguring: false, selectedKey: null };
 
 const COINS = [
-  { symbol: 'BTC', name: 'Bitcoin', emoji: '₿' },
-  { symbol: 'ETH', name: 'Ethereum', emoji: '◇' },
-  { symbol: 'SOL', name: 'Solana', emoji: '◎' },
+  { symbol: 'BTC',    name: 'Bitcoin',      emoji: '₿'  },
+  { symbol: 'ETH',    name: 'Ethereum',     emoji: '◇'  },
+  { symbol: 'SOL',    name: 'Solana',       emoji: '◎'  },
   { symbol: 'VENICE', name: 'Venice Token', emoji: '🦋' },
-  { symbol: 'XRP', name: 'Ripple', emoji: '✕' }
+  { symbol: 'XRP',    name: 'Ripple',       emoji: '✕'  },
 ];
 
-// Configuraciones editable
 const EDITABLE_CONFIG = [
-  'REVOLUT_API_KEY',
-  'REVOLUT_BASE_URL',
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_MODEL',
-  'TELEGRAM_BOT_TOKEN',
-  'TELEGRAM_CHAT_ID',
-  'TRADING_PAIRS',
-  'MAX_TRADE_SIZE',
-  'MIN_ORDER',
-  'CRON_ENABLED',
-  'CRON_SCHEDULE',
-  'DRY_RUN',
-  'DEBUG_API'
+  'REVOLUT_API_KEY', 'REVOLUT_BASE_URL',
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
+  'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
+  'TRADING_PAIRS', 'MAX_TRADE_SIZE', 'MIN_ORDER',
+  'CRON_ENABLED', 'CRON_SCHEDULE',
+  'DRY_RUN', 'DEBUG_API',
 ];
 
-async function sendMessage(text, replyMarkup = null) {
-  if (!text || !text.trim()) {
-    logger.warn('⚠️ Attempted to send empty message');
-    return;
-  }
+// ── Cron presets ──────────────────────────────────────────────────
+const CRON_PRESETS = [
+  { label: '5 min',  expr: '*/5 * * * *'  },
+  { label: '15 min', expr: '*/15 * * * *' },
+  { label: '30 min', expr: '*/30 * * * *' },
+  { label: '1 hora', expr: '0 * * * *'    },
+  { label: '4 horas',expr: '0 */4 * * *'  },
+];
 
+// ─────────────────────────────────────────────────────────────────
+//  Telegram helpers
+// ─────────────────────────────────────────────────────────────────
+
+function telegramRequest(method, payload) {
   return new Promise((resolve, reject) => {
-    const cleanText = text.trim();
-    const payload = { chat_id: CHAT_ID, text: cleanText, parse_mode: 'HTML' };
-    if (replyMarkup) payload.reply_markup = replyMarkup;
-
     const data = JSON.stringify(payload);
     const options = {
       hostname: 'api.telegram.org',
-      path: `/bot${BOT_TOKEN}/sendMessage`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': data.length
-      }
+      path:     `/bot${BOT_TOKEN}/${method}`,
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/json', 'Content-Length': data.length },
     };
 
-    const req = https.request(options, (res) => {
+    const req = https.request(options, res => {
       let body = '';
-      res.on('data', (chunk) => { body += chunk; });
+      res.on('data', c => body += c);
       res.on('end', () => {
-        if (res.statusCode === 200) resolve(JSON.parse(body));
+        const parsed = JSON.parse(body);
+        if (res.statusCode === 200) resolve(parsed);
         else reject(new Error(`HTTP ${res.statusCode}: ${body}`));
       });
     });
-
     req.on('error', reject);
     req.write(data);
     req.end();
   });
 }
 
-/**
- * Leer todas las variables del .env
- */
-function readEnvFile() {
-  try {
-    const content = fs.readFileSync(ENV_PATH, 'utf-8');
-    const env = {};
-    content.split('\n').forEach(line => {
-      line = line.trim();
-      if (!line || line.startsWith('#')) return;
-      const [key, ...valueParts] = line.split('=');
-      if (key) env[key.trim()] = (valueParts.join('=')).trim();
-    });
-    return env;
-  } catch (err) {
-    logger.error('Error reading .env:', err.message);
-    return {};
-  }
+async function sendMessage(text, replyMarkup = null) {
+  if (!text?.trim()) return;
+  const payload = { chat_id: CHAT_ID, text: text.trim(), parse_mode: 'HTML' };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+  return telegramRequest('sendMessage', payload).catch(err =>
+    logger.error('Telegram sendMessage failed:', err.message)
+  );
 }
 
-/**
- * Escribir variable en .env
- */
+async function editMessage(messageId, text, replyMarkup = null) {
+  const payload = { chat_id: CHAT_ID, message_id: messageId, text, parse_mode: 'HTML' };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+  return telegramRequest('editMessageText', payload).catch(err =>
+    logger.error('Telegram editMessage failed:', err.message)
+  );
+}
+
+async function answerCallback(callbackQueryId, text = '✅') {
+  return telegramRequest('answerCallbackQuery', {
+    callback_query_id: callbackQueryId, text, show_alert: false,
+  }).catch(() => {});
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  .env helpers
+// ─────────────────────────────────────────────────────────────────
+
+function readEnvFile() {
+  try {
+    const env = {};
+    fs.readFileSync(ENV_PATH, 'utf-8').split('\n').forEach(line => {
+      line = line.trim();
+      if (!line || line.startsWith('#')) return;
+      const [key, ...rest] = line.split('=');
+      if (key) env[key.trim()] = rest.join('=').trim();
+    });
+    return env;
+  } catch { return {}; }
+}
+
 function updateEnvFile(key, value) {
   try {
     let content = fs.readFileSync(ENV_PATH, 'utf-8');
     const regex = new RegExp(`^${key}=.*$`, 'm');
-    
-    if (regex.test(content)) {
-      content = content.replace(regex, `${key}=${value}`);
-    } else {
-      content += `\n${key}=${value}`;
-    }
-    
+    content = regex.test(content)
+      ? content.replace(regex, `${key}=${value}`)
+      : content + `\n${key}=${value}`;
     fs.writeFileSync(ENV_PATH, content, 'utf-8');
     process.env[key] = value;
-    logger.info(`✅ Updated ${key} in .env`);
     return true;
   } catch (err) {
-    logger.error(`❌ Error updating .env:`, err.message);
+    logger.error(`updateEnvFile failed:`, err.message);
     return false;
   }
 }
 
-async function answerCallback(callbackQueryId, text) {
-  return new Promise((resolve, reject) => {
-    const payload = { callback_query_id: callbackQueryId, text, show_alert: false };
-    const data = JSON.stringify(payload);
-    const options = {
-      hostname: 'api.telegram.org',
-      path: `/bot${BOT_TOKEN}/answerCallbackQuery`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': data.length
-      }
-    };
+// ─────────────────────────────────────────────────────────────────
+//  Cron management
+// ─────────────────────────────────────────────────────────────────
 
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        if (res.statusCode === 200) resolve(JSON.parse(body));
-        else reject(new Error(`HTTP ${res.statusCode}: ${body}`));
-      });
-    });
+function startCron(schedule) {
+  if (cronTask) { cronTask.stop(); cronTask = null; }
 
-    req.on('error', reject);
-    req.write(data);
-    req.end();
+  if (!cron.validate(schedule)) {
+    logger.error(`Invalid cron expression: ${schedule}`);
+    return false;
+  }
+
+  cronTask = cron.schedule(schedule, async () => {
+    logger.info(`⏰ Cron triggered: ${schedule}`);
+    try {
+      await runAgentCycle('cron');
+    } catch (err) {
+      logger.error('Cron cycle failed:', err.message);
+    }
   });
+
+  cronEnabled  = true;
+  cronSchedule = schedule;
+  updateEnvFile('CRON_ENABLED', 'true');
+  updateEnvFile('CRON_SCHEDULE', schedule);
+  logger.info(`✅ Cron started: ${schedule}`);
+  return true;
 }
 
-async function editMessage(messageId, text, replyMarkup = null) {
-  return new Promise((resolve, reject) => {
-    const payload = { chat_id: CHAT_ID, message_id: messageId, text, parse_mode: 'HTML' };
-    if (replyMarkup) payload.reply_markup = replyMarkup;
-
-    const data = JSON.stringify(payload);
-    const options = {
-      hostname: 'api.telegram.org',
-      path: `/bot${BOT_TOKEN}/editMessageText`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': data.length
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        if (res.statusCode === 200) resolve(JSON.parse(body));
-        else reject(new Error(`HTTP ${res.statusCode}: ${body}`));
-      });
-    });
-
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
+function stopCron() {
+  if (cronTask) { cronTask.stop(); cronTask = null; }
+  cronEnabled = false;
+  updateEnvFile('CRON_ENABLED', 'false');
+  logger.info('⏹ Cron stopped');
 }
+
+function getCronStatus() {
+  const next = cronEnabled && cronSchedule
+    ? `Próximo ciclo según: >${cronSchedule}>`
+    : 'Desactivado';
+  return {
+    enabled:  cronEnabled,
+    schedule: cronSchedule,
+    next,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  Command handlers
+// ─────────────────────────────────────────────────────────────────
 
 async function handleStart() {
-  const text = `🤖 REVOLUT X TRADING AGENT\n\n✨ ¡Bienvenido!\n\n🎯 COMANDOS RÁPIDOS:\n/btc - Bitcoin\n/eth - Ethereum\n/sol - Solana\n/venice - Venice\n/xrp - Ripple\n\n📊 OTROS:\n/trigger - Menú\n/status - Config\n/configuration - Edit Config\n/help - Ayuda\n\n⚡ EMPEZAR:\n1. Escribe /btc\n2. Agent ejecuta\n3. ¡Listo!\n\n✅ Datos REALES`;
-  await sendMessage(text);
+  await sendMessage(`🤖 REVOLUT X TRADING AGENT
+
+🎯 OPERAR:
+/btc 
+/eth 
+/sol 
+/venice 
+/xrp
+
+⏰ Cron automático:
+/cron — ver estado y opciones
+/cron_on — activar
+/cron_off — desactivar
+/cron_5m -> cada 5 min
+/cron_15m -> cada 15 min
+/cron_1h -> cada hora
+/cron_4h -> cada 4 horas
+
+⚙️ CONFIG:
+/status /configuration /help`);
 }
 
-async function handleConfiguration() {
-  const envVars = readEnvFile();
-  let configText = '⚙️ CONFIGURACIÓN EDITABLE\n\n';
-  
-  EDITABLE_CONFIG.forEach((key, idx) => {
-    const value = envVars[key] || process.env[key] || '(no configurado)';
-    const displayValue = key.includes('KEY') || key.includes('TOKEN') 
-      ? value.substring(0, 10) + '...' 
-      : value;
-    configText += `${idx + 1}. ${key}: ${displayValue}\n`;
-  });
+async function handleHelp() {
+  await sendMessage(`❓ COMANDOS DISPONIBLES
 
-  configText += `\n📝 INSTRUCCIONES:
-1️⃣  Responde con el NÚMERO de la variable
-2️⃣  Escribe el nuevo valor
-3️⃣  Se actualizará inmediatamente
+Análisis manual:
+/btc — Bitcoin
+/eth — Ethereum
+/sol — Solana
+/venice — Venice Token
+/xrp — Ripple
 
-Ejemplo: "3" luego "sk-ant-api03-xxx"`;
+Cron automático:
+/cron — ver estado y opciones
+/cron_on — activar
+/cron_off — desactivar
+/cron_*/5 * * * *>  → cada 5 min
+/cron_*/15 * * * *> → cada 15 min
+/cron_0 * * * *>    → cada hora
+/cron_0 */4 * * *>  → cada 4 horas
 
-  configState.isConfigurating = true;
-  await sendMessage(configText);
+Info:
+/status — configuración actual y cron
+/configuration — editar variables .env
+/help — este menú`);
 }
 
-async function handleConfigurationInput(userInput) {
-  if (!configState.isConfigurating) return;
+async function handleStatus() {
+  const dry = process.env.DRY_RUN === 'true' ? '🔒 DRY-RUN' : '🔴 REAL MONEY';
+  const cronSt = getCronStatus();
+  let parseCron = CronParse(cronSt.schedule);
 
-  const input = userInput.trim();
+  await sendMessage(`📊 ESTADO ACTUAL
 
-  // Si ya seleccionó una variable, el siguiente input es el valor
-  if (configState.selectedConfig) {
-    const key = configState.selectedConfig;
-    const value = input;
-    
-    const success = updateEnvFile(key, value);
-    if (success) {
-      await sendMessage(`✅ ${key} actualizado correctamente.\n\nNuevo valor: ${value}\n\n👉 /configuration para cambiar otro\n👉 /help para ver otros comandos`);
+🎯 Pares: >${process.env.TRADING_PAIRS}>
+💰 Max trade: >${(parseFloat(process.env.MAX_TRADE_SIZE || 0.1) * 100).toFixed(0)}%>
+💵 Min orden: >$${process.env.MIN_ORDER}>
+🧠 Modelo: >${process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5'}>
+
+⏰ Cron: ${cronSt.enabled ? '✅ ACTIVO' : '⏸ INACTIVO'}
+📅 Schedule: >${parseCron}>
+
+${dry}`);
+}
+
+// ── /cron command ─────────────────────────────────────────────────
+async function handleCron(args) {
+  // /cron on
+  if (args === 'on') {
+    if (startCron(cronSchedule)) {
+      await sendMessage(`✅ Cron activado\nSchedule: >${cronSchedule}>`);
     } else {
-      await sendMessage(`❌ Error al guardar ${key}. Intenta de nuevo.`);
+      await sendMessage(`❌ Schedule inválido: >${cronSchedule}>`);
     }
-    
-    configState.isConfigurating = false;
-    configState.selectedConfig = null;
     return;
   }
 
-  // Si no ha seleccionado variable, esperamos un número
-  const idx = parseInt(input) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= EDITABLE_CONFIG.length) {
-    await sendMessage('❌ Número inválido. Por favor responde con un número del 1 al 13.');
+  // /cron off
+  if (args === 'off') {
+    stopCron();
+    await sendMessage('⏹ Cron desactivado. Las operaciones manuales siguen disponibles.');
     return;
   }
 
-  configState.selectedConfig = EDITABLE_CONFIG[idx];
-  await sendMessage(`✏️ Variable seleccionada: ${configState.selectedConfig}\n\n📝 Escribe el nuevo valor:`);
-}
+  // /cron <expr>  — set new schedule and start
+  if (args && args.trim()) {
+    const expr = args.trim();
+    if (!cron.validate(expr)) {
+      await sendMessage(`❌ Expresión cron inválida: >${expr}>
 
-async function handleTrigger(messageId) {
-  const text = `💰 SELECCIONA UNA CRIPTOMONEDA\n\n/btc - Bitcoin\n/eth - Ethereum\n/sol - Solana\n/venice - Venice Token\n/xrp - Ripple\n\nEscribe un comando para empezar`;
-  await sendMessage(text);
-}
-
-async function handleCoinSelect(callbackQueryId, messageId, coinIndex) {
-  const coin = COINS[coinIndex];
-  if (!coin) return;
-
-  await answerCallback(callbackQueryId, `✅ ${coin.emoji} ${coin.symbol} seleccionado. Procesando...`);
-
-  const originalPairs = process.env.TRADING_PAIRS;
-  process.env.TRADING_PAIRS = `${coin.symbol}/USD`;
-
-  try {
-    await editMessage(messageId, `
-⏳ PROCESANDO ${coin.emoji} ${coin.symbol}
-
-Paso 1/4: 📊 Fetching datos de CoinGecko...
-Paso 2/4: ⏳ Analizando indicadores...
-Paso 3/4: ⏳ Consultando Claude AI...
-Paso 4/4: ⏳ Ejecutando decisión...
-
-Por favor espera...
-    `);
-
-    await runAgentCycle('telegram');
-
-    await editMessage(messageId, `
-✅ CICLO COMPLETADO - ${coin.emoji} ${coin.symbol}
-
-El análisis ha terminado correctamente.
-Verifica el portal de Revolut X para ver el resultado de la orden.
-
-Próximos pasos:
-• /trigger para otra moneda
-• /status para ver configuración
-• /help para más opciones
-    `);
-    logger.info(`✅ Telegram trigger completed for ${coin.symbol}`);
-  } catch (err) {
-    logger.error(`❌ Telegram trigger failed for ${coin.symbol}`, err.message);
-    await editMessage(messageId, `
-❌ ERROR AL PROCESAR ${coin.emoji} ${coin.symbol}
-
-Motivo:
-${err.message}
-
-Intenta de nuevo con /trigger
-    `);
-  }
-
-  process.env.TRADING_PAIRS = originalPairs;
-}
-
-async function handleCoinCommand(messageId, symbol, coinIndex) {
-  const coin = COINS[coinIndex];
-  if (!coin) {
-    await sendMessage('❌ Coin not found. Try /help');
+Ejemplos válidos:
+>*/5 * * * *  → cada 5 min
+>*/15 * * * * → cada 15 min
+>0 * * * *    → cada hora
+>0 */4 * * *  → cada 4 horas`);
+      return;
+    }
+    if (startCron(expr)) {
+      let parseCron = CronParse(expr);
+      await sendMessage(`✅ Cron actualizado y activado\n Ciclo: ${parseCron}`);
+    }
     return;
   }
+
+  // /cron — show status + inline keyboard
+  const st = getCronStatus();
+  
+
+  const keyboard = {
+    inline_keyboard: [
+      // Row 1: Enable / Disable
+      [
+        { text: st.enabled ? '⏸ Desactivar' : '▶️ Activar', callback_data: st.enabled ? 'cron_off' : 'cron_on' },
+        { text: '🔄 Ejecutar ahora', callback_data: 'cron_now' },
+      ],
+      // Row 2: Presets
+      ...chunk(CRON_PRESETS.map(p => ({
+        text: p.label,
+        callback_data: `cron_set_${p.expr}`,
+      })), 3),
+    ],
+  };
+
+  await sendMessage(
+    `⏰ GESTIÓN DE CRON\n\n` +
+    `Estado: ${st.enabled ? '✅ ACTIVO' : '⏸ INACTIVO'}\n` +
+    `Schedule: ${st.schedule}\n\n` +
+    `Selecciona una opción o envía:\n/cron */15 * * * *`,
+    keyboard
+  );
+}
+
+// ── Coin command ──────────────────────────────────────────────────
+async function handleCoinCommand(symbol) {
+  const coin = COINS.find(c => c.symbol === symbol);
+  if (!coin) { await sendMessage('❌ Moneda no encontrada. Usa /help'); return; }
+
+  await sendMessage(`⏳ Analizando ${coin.emoji} ${symbol}...\n\nFetching datos → indicadores → Claude AI → ejecución`);
 
   const originalPairs = process.env.TRADING_PAIRS;
   process.env.TRADING_PAIRS = `${symbol}/USD`;
 
   try {
-    await sendMessage(`⏳ Analyzing ${coin.emoji} ${symbol}...\n\n📊 Fetching CoinGecko data\n⏳ Computing indicators\n⏳ Consulting Claude AI\n⏳ Executing decision`);
-
-    // runAgentCycle() will send formatted message via notify()
     await runAgentCycle('telegram');
-
-    // No additional message here - executor.js already sent formatted result via notify()
-    logger.info(`✅ Telegram command completed for ${symbol}`);
+    // executor.js already sends the formatted result via notify()
   } catch (err) {
-    logger.error(`❌ Telegram command failed for ${symbol}`, err.message);
-    await sendMessage(`❌ Error processing ${coin.emoji} ${symbol}\n\n🔴 ${err.message}\n\nTry again: /${symbol.toLowerCase()}`);
+    logger.error(`Coin command failed for ${symbol}:`, err.message);
+    await sendMessage(`❌ Error procesando ${coin.emoji} ${symbol}\n\n>${err.message}>\n\nIntenta de nuevo: /${symbol.toLowerCase()}`);
+  } finally {
+    process.env.TRADING_PAIRS = originalPairs;
+  }
+}
+
+// ── /configuration ────────────────────────────────────────────────
+async function handleConfiguration() {
+  const envVars = readEnvFile();
+  let text = '⚙️ CONFIGURACIÓN EDITABLE\n\n';
+
+  EDITABLE_CONFIG.forEach((key, i) => {
+    const value = envVars[key] || process.env[key] || '(no configurado)';
+    const display = key.includes('KEY') || key.includes('TOKEN')
+      ? value.substring(0, 10) + '...'
+      : value;
+    text += `${i + 1}. ${key}: ${display}\n`;
+  });
+
+  text += `\n📝 Responde con el NÚMERO y luego el nuevo valor.\nEjemplo: 4 → claude-haiku-4-5`;
+
+  configState.isConfiguring = true;
+  configState.selectedKey   = null;
+  await sendMessage(text);
+}
+
+async function handleConfigInput(text) {
+  if (!configState.isConfiguring) return;
+
+  if (!configState.selectedKey) {
+    const idx = parseInt(text.trim()) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= EDITABLE_CONFIG.length) {
+      await sendMessage(`❌ Número inválido (1-${EDITABLE_CONFIG.length})`);
+      return;
+    }
+    configState.selectedKey = EDITABLE_CONFIG[idx];
+    await sendMessage(`✏️ ${configState.selectedKey}\n\nEscribe el nuevo valor:`);
+    return;
   }
 
-  process.env.TRADING_PAIRS = originalPairs;
+  const key   = configState.selectedKey;
+  const value = text.trim();
+  const ok    = updateEnvFile(key, value);
+
+  // If cron-related, apply immediately
+  if (key === 'CRON_SCHEDULE') cronSchedule = value;
+  if (key === 'CRON_ENABLED') {
+    value === 'true' ? startCron(cronSchedule) : stopCron();
+  }
+
+  await sendMessage(ok
+    ? `✅ ${key} actualizado.\n\n/configuration para más cambios`
+    : `❌ Error guardando ${key}`
+  );
+
+  configState.isConfiguring = false;
+  configState.selectedKey   = null;
 }
 
-async function handleStatus() {
-  const dryRun = process.env.DRY_RUN === 'true' ? '🔒 DRY-RUN' : '🔴 REAL';
-  const text = `📊 ESTADO ACTUAL\n\n🎯 Pares: ${process.env.TRADING_PAIRS}\n💰 Max: ${(parseFloat(process.env.MAX_TRADE_SIZE) * 100).toFixed(1)}%\n💵 Min: $${process.env.MIN_ORDER}\n⏰ Cron: ${process.env.CRON_SCHEDULE}\n\n✅ CoinGecko: REAL\n✅ Claude AI: ACTIVO\n${dryRun}`;
-  await sendMessage(text);
+// ─────────────────────────────────────────────────────────────────
+//  Callback query handler
+// ─────────────────────────────────────────────────────────────────
+
+async function handleCallback(callbackQueryId, data, messageId) {
+  await answerCallback(callbackQueryId);
+
+  if (data === 'cron_on') {
+    const ok = startCron(cronSchedule);
+    await editMessage(messageId,
+      ok
+        ? `✅ Cron activado\nSchedule: ${cronSchedule}`
+        : `❌ Error activando cron. Schedule actual: ${cronSchedule}`
+    );
+    return;
+  }
+
+  if (data === 'cron_off') {
+    stopCron();
+    await editMessage(messageId, '⏹ Cron desactivado.');
+    return;
+  }
+
+  if (data === 'cron_now') {
+    await editMessage(messageId, '⏳ Ejecutando ciclo ahora...');
+    try {
+      await runAgentCycle('manual');
+      await editMessage(messageId, '✅ Ciclo completado. Revisa el reporte arriba ↑');
+    } catch (err) {
+      await editMessage(messageId, `❌ Error: ${err.message}`);
+    }
+    return;
+  }
+
+  if (data.startsWith('cron_set_')) {
+    const expr = data.replace('cron_set_', '');
+    const ok   = startCron(expr);
+    await editMessage(messageId,
+      ok
+        ? `✅ Cron actualizado\nSchedule: ${expr}\nEstado: ACTIVO`
+        : `❌ Error con schedule: ${expr}`
+    );
+    return;
+  }
 }
 
-async function handleHelp() {
-  const text = `❓ AYUDA - COMANDOS\n\n🎯 OPERAR:\n/btc - Bitcoin\n/eth - Ethereum\n/sol - Solana\n/venice - Venice\n/xrp - Ripple\n\n📊 INFO:\n/trigger - Menú\n/status - Config\n/configuration - ⚙️ Edit variables\n/help - Ayuda\n\n⚡ CÓMO:\n1️⃣ Escribe /btc\n2️⃣ Agent analiza\n3️⃣ Ejecuta orden\n\n✅ Datos: REALES\n✅ AI: Claude`;
-  await sendMessage(text);
-}
+// ─────────────────────────────────────────────────────────────────
+//  Long polling loop
+// ─────────────────────────────────────────────────────────────────
 
-async function getUpdates(offset = 0) {
-  return new Promise((resolve, reject) => {
+async function getUpdates() {
+  return new Promise((resolve) => {
     const options = {
       hostname: 'api.telegram.org',
-      path: `/bot${BOT_TOKEN}/getUpdates?offset=${offset}&timeout=30`,
-      method: 'GET'
+      path:     `/bot${BOT_TOKEN}/getUpdates?offset=${updateOffset}&timeout=25`,
+      method:   'GET',
     };
-
-    const req = https.request(options, (res) => {
+    const req = https.request(options, res => {
       let body = '';
-      res.on('data', (chunk) => { body += chunk; });
+      res.on('data', c => body += c);
       res.on('end', () => {
-        if (res.statusCode === 200) resolve(JSON.parse(body).result || []);
-        else reject(new Error(`HTTP ${res.statusCode}`));
+        try { resolve(JSON.parse(body).result || []); }
+        catch { resolve([]); }
       });
     });
-
-    req.on('error', reject);
+    req.on('error', () => resolve([]));
     req.end();
   });
 }
 
 async function processUpdates() {
-  try {
-    const updates = await getUpdates(UPDATE_OFFSET.value || 0);
+  const updates = await getUpdates();
 
-    if (updates.length === 0) {
-      // No updates, wait a bit before retrying
-      return;
-    }
+  for (const update of updates) {
+    updateOffset = update.update_id + 1;
 
-    for (const update of updates) {
-      UPDATE_OFFSET.value = update.update_id + 1;
-
-      // Text messages (commands)
+    try {
+      // ── Text messages ───────────────────────────────────────────
       if (update.message?.text) {
-        const text = update.message.text.toLowerCase();
-        const messageId = update.message.message_id;
+        const full = update.message.text.trim();
+        const [cmd, ...argParts] = full.split(' ');
+        const args = argParts.join(' ');
+        const command = cmd.toLowerCase();
 
-        if (text === '/start') await handleStart();
-        else if (text === '/trigger') await handleTrigger();
-        else if (text === '/status') await handleStatus();
-        else if (text === '/configuration') await handleConfiguration();
-        else if (text === '/help') await handleHelp();
-        
-        // Direct coin commands
-        else if (text === '/btc') await handleCoinCommand(messageId, 'BTC', 0);
-        else if (text === '/eth') await handleCoinCommand(messageId, 'ETH', 1);
-        else if (text === '/sol') await handleCoinCommand(messageId, 'SOL', 2);
-        else if (text === '/venice') await handleCoinCommand(messageId, 'VENICE', 3);
-        else if (text === '/xrp') await handleCoinCommand(messageId, 'XRP', 4);
-        
-        // Configuration input handling
-        else if (configState.isConfigurating) await handleConfigurationInput(update.message.text);
-        
-        else await sendMessage('❓ Comando no reconocido. Usa /help para ver comandos disponibles.');
-      }
+        if (configState.isConfiguring && !command.startsWith('/')) {
+          await handleConfigInput(full);
+          continue;
+        }
 
-      // Button callbacks
-      if (update.callback_query) {
-        const { id: callbackId, data, message } = update.callback_query;
-        
-        if (data.startsWith('trade_')) {
-          const coinIndex = parseInt(data.split('_')[1]);
-          await handleCoinSelect(callbackId, message.message_id, coinIndex);
+        switch (command) {
+          case '/start':         await handleStart();            break;
+          case '/help':          await handleHelp();             break;
+          case '/status':        await handleStatus();           break;
+          case '/trigger':       await handleHelp();             break;
+          case '/configuration': await handleConfiguration();    break;
+          case '/cron':          await handleCron(args);         break;
+          case '/cron_on':       await handleCron('on');         break;
+          case '/cron_off':      await handleCron('off');        break;
+          case '/cron_5m':        await handleCron('*/5 * * * *'); break;
+          case '/cron_15m':       await handleCron('*/15 * * * *');break;
+          case '/cron_1h':        await handleCron('0 * * * *');   break;
+          case '/cron_4h':        await handleCron('0 */4 * * *'); break;
+          case '/btc':           await handleCoinCommand('BTC'); break;
+          case '/eth':           await handleCoinCommand('ETH'); break;
+          case '/sol':           await handleCoinCommand('SOL'); break;
+          case '/venice':        await handleCoinCommand('VENICE'); break;
+          case '/xrp':           await handleCoinCommand('XRP'); break;
+          default:
+            await sendMessage('❓ Comando no reconocido. Usa /help');
         }
       }
+
+      // ── Callbacks ────────────────────────────────────────────────
+      if (update.callback_query) {
+        const { id, data, message } = update.callback_query;
+        await handleCallback(id, data, message?.message_id);
+      }
+
+    } catch (err) {
+      if (!err.message?.includes('409')) {
+        logger.error('Error processing update:', err.message);
+      }
     }
-  } catch (err) {
-    // Silently handle 409 conflicts (normal with long polling)
-    if (err.message.includes('409')) {
-      return; // Skip logging for 409 errors
-    }
-    logger.error('Error processing Telegram updates:', err.message);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────
+//  Exports
+// ─────────────────────────────────────────────────────────────────
 
 export async function startTelegramBot() {
   if (!BOT_TOKEN || !CHAT_ID) {
-    logger.warn('⚠️ Telegram bot not configured. Skipping telegram bot initialization.');
-    logger.warn('   Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env to enable.');
+    logger.warn('⚠️ Telegram not configured (missing BOT_TOKEN or CHAT_ID)');
     return;
   }
 
-  logger.info('🤖 Starting Telegram bot polling...');
-  
-  // Send startup message
-  await sendMessage('✅ Trading Bot Started\n\nBienvenido. Escribe /start para ver comandos.').catch(() => {});
+  logger.info('🤖 Starting Telegram bot...');
 
-  // Long polling (3 seconds between polls to avoid 409 conflicts)
+  // Auto-start cron if enabled in env
+  if (cronEnabled && cron.validate(cronSchedule)) {
+    startCron(cronSchedule);
+    logger.info(`⏰ Auto-started cron: ${cronSchedule}`);
+  }
+
+  await sendMessage(
+    `✅ Trading Bot Online\n\n` +
+    `Cron: ${cronEnabled ? `✅ ${cronSchedule}` : '⏸ desactivado'}\n` +
+    `DRY_RUN: ${process.env.DRY_RUN === 'true' ? '🔒 sí' : '🔴 no'}\n\n` +    
+    `/start para ver comandos`
+  ).catch(() => {});
+
+  // Long poll every 3 seconds
   setInterval(processUpdates, 3000);
 }
 
+export { startCron, stopCron, getCronStatus };
 export default startTelegramBot;
+
+// ─────────────────────────────────────────────────────────────────
+//  Utility
+// ─────────────────────────────────────────────────────────────────
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}

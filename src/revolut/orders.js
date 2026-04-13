@@ -1,7 +1,9 @@
 /**
- * revolut/orders.js - Place and manage orders on Revolut X
+ * revolut/orders.js
+ * Place and manage orders on Revolut X.
  */
 
+import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger.js';
 
 export class OrderManager {
@@ -10,68 +12,85 @@ export class OrderManager {
     this.dryRun = process.env.DRY_RUN === 'true';
   }
 
-  async placeOrder({ symbol, side, type, qty, price, takeProfit, stopLoss }) {
-    const revolutSymbol = symbol.replace('/', '-');
-    
-    if (!symbol || !side || !type || !qty) {
-      throw new Error(`Invalid order params: symbol=${symbol}, side=${side}, type=${type}, qty=${qty}`);
+  _toDashedSymbol(symbol) {
+    return symbol.replace('/', '-');
+  }
+
+  async placeOrder({ symbol, side, type, usdAmount, price, takeProfit, stopLoss }) {
+    if (!symbol || !side || !type || usdAmount === undefined || usdAmount === null) {
+      throw new Error(`Missing order params: symbol=${symbol}, side=${side}, type=${type}, usdAmount=${usdAmount}`);
     }
 
-    const orderConfig = {};
+    const usd = Number(usdAmount);
+    if (!Number.isFinite(usd) || usd <= 0) {
+      throw new Error(`Invalid usdAmount: ${usdAmount}`);
+    }
+
+    const revolutSymbol = this._toDashedSymbol(symbol);
+
+    let order_configuration;
+
     if (type === 'market') {
-      orderConfig.market = { base_size: qty.toString() };
+      order_configuration = {
+        market: {
+          quote_size: usd.toFixed(2),
+        },
+      };
     } else if (type === 'limit') {
-      if (!price) throw new Error('Price required for limit orders');
-      orderConfig.limit = { base_size: qty.toString(), price: price.toString() };
+      const parsedPrice = Number(price);
+      if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+        throw new Error(`Invalid limit price: ${price}`);
+      }
+
+      const cryptoQty = (usd / parsedPrice).toFixed(8);
+
+      order_configuration = {
+        limit: {
+          base_size: cryptoQty,
+          price: parsedPrice.toFixed(2),
+          execution_instructions: ['allow_taker'],
+        },
+      };
     } else {
       throw new Error(`Invalid order type: ${type}`);
     }
 
     const payload = {
-      client_order_id: this.generateClientOrderId(),
+      client_order_id: randomUUID(),
       symbol: revolutSymbol,
       side: side.toLowerCase(),
-      order_configuration: orderConfig
+      order_configuration,
     };
 
     if (this.dryRun) {
-      logger.info(`[DRY RUN] Order: ${side.toUpperCase()} ${qty} ${revolutSymbol} @ ${price || 'market'}`);
+      logger.info(`[DRY RUN] ${side.toUpperCase()} $${usd} ${revolutSymbol} (${type})`);
       return {
         dryRun: true,
         clientOrderId: payload.client_order_id,
         orderId: `dry-${Date.now()}`,
         symbol: revolutSymbol,
-        side: side.toLowerCase(),
+        side: payload.side,
         type,
-        qty: qty.toString(),
+        usdAmount: usd,
         takeProfit: takeProfit || null,
-        stopLoss: stopLoss || null
+        stopLoss: stopLoss || null,
+        payload,
       };
     }
 
-    try {
-      logger.info(`📤 Sending order: ${side.toUpperCase()} ${qty} ${revolutSymbol}`);
-      const result = await this.client.post('/orders', payload);
-      logger.info(`✅ Order placed: ${result?.id || 'N/A'}`);
-      
-      return {
-        ...result,
-        clientOrderId: payload.client_order_id,
-        symbol: revolutSymbol,
-        side: side.toLowerCase(),
-        type,
-        qty: qty.toString(),
-        takeProfit: takeProfit || null,
-        stopLoss: stopLoss || null
-      };
-    } catch (err) {
-      logger.error(`❌ Order failed: ${err.message}`);
-      throw new Error(`Failed to place order: ${err.message}`);
-    }
-  }
+    const result = await this.client.post('/orders', payload);
 
-  generateClientOrderId() {
-    return `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return {
+      ...(result?.data || {}),
+      raw: result,
+      clientOrderId: payload.client_order_id,
+      symbol: revolutSymbol,
+      side: payload.side,
+      type,
+      usdAmount: usd,
+      takeProfit: takeProfit || null,
+      stopLoss: stopLoss || null,
+    };
   }
 
   async cancelOrder(orderId) {
@@ -86,29 +105,29 @@ export class OrderManager {
     return this.client.get(`/orders/${orderId}`);
   }
 
-  static calcQty(usdAmount, currentPrice, decimals = 6) {
-    return (usdAmount / currentPrice).toFixed(decimals);
-  }
-
   static calcRiskReward(entryPrice, takeProfit, stopLoss, side = 'buy') {
-    let tpDistance, slDistance, ratio;
-    
-    if (side === 'buy') {
-      tpDistance = ((takeProfit - entryPrice) / entryPrice * 100).toFixed(2);
-      slDistance = ((entryPrice - stopLoss) / entryPrice * 100).toFixed(2);
-    } else {
-      tpDistance = ((entryPrice - takeProfit) / entryPrice * 100).toFixed(2);
-      slDistance = ((stopLoss - entryPrice) / entryPrice * 100).toFixed(2);
-    }
-    
-    ratio = (Math.abs(parseFloat(tpDistance)) / Math.abs(parseFloat(slDistance))).toFixed(2);
-    
+    const entry = Number(entryPrice);
+    const tp = Number(takeProfit);
+    const sl = Number(stopLoss);
+
+    const tpDistancePct = side === 'buy'
+      ? ((tp - entry) / entry) * 100
+      : ((entry - tp) / entry) * 100;
+
+    const slDistancePct = side === 'buy'
+      ? ((entry - sl) / entry) * 100
+      : ((sl - entry) / entry) * 100;
+
+    const ratio = slDistancePct > 0
+      ? (Math.abs(tpDistancePct) / Math.abs(slDistancePct)).toFixed(2)
+      : 'N/A';
+
     return {
-      tpDistance: `+${tpDistance}%`,
-      slDistance: `-${slDistance}%`,
+      tpDistance: `+${tpDistancePct.toFixed(2)}%`,
+      slDistance: `-${slDistancePct.toFixed(2)}%`,
       riskRewardRatio: ratio,
-      tpDistanceNum: parseFloat(tpDistance),
-      slDistanceNum: parseFloat(slDistance)
+      tpDistanceNum: tpDistancePct,
+      slDistanceNum: slDistancePct,
     };
   }
 }

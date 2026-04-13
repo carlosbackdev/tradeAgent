@@ -123,3 +123,9 @@ export function closesFromTrades(trades) {
     return null;
   }).filter(p => p !== null);
 }
+
+export function closesFromCandles(candlesArray = []) {
+  return candlesArray
+    .map(c => Number(c.close))
+    .filter(n => Number.isFinite(n));
+}

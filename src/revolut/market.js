@@ -1,7 +1,6 @@
 /**
  * revolut/market.js
- * Fetches REAL market data only from CoinGecko API (public, no auth needed).
- * No simulated data - only real market data.
+ * Real market data from Revolut X only.
  */
 
 import { logger } from '../utils/logger.js';
@@ -9,139 +8,189 @@ import { logger } from '../utils/logger.js';
 export class MarketData {
   constructor(client) {
     this.client = client;
-    this.coingeckoBaseUrl = 'https://api.coingecko.com/api/v3';
-    this.cryptoIds = {
-      'BTC': 'bitcoin',
-      'ETH': 'ethereum',
-      'SOL': 'solana',
-      'VENICE': 'venice',
-      'XRP': 'ripple'
-    };
+  }
+
+  _toDashedSymbol(symbol) {
+    return symbol.replace('/', '-');
+  }
+
+  _toSlashedSymbol(symbol) {
+    return symbol.replace('-', '/');
+  }
+
+  _safeNum(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
   }
 
   /**
-   * Map trading symbol to CoinGecko crypto ID
-   * e.g., "BTC/USD" → "bitcoin"
-   */
-  _getCoinGeckoId(symbol) {
-    const base = symbol.split('/')[0];
-    return this.cryptoIds[base] || base.toLowerCase();
-  }
-
-  /**
-   * Fetch ticker data from CoinGecko (REAL DATA ONLY)
+   * Get ticker from Revolut X.
+   * Docs show ticker response entries with symbol like BTC/USD.
    */
   async getTicker(symbol) {
-    const coinId = this._getCoinGeckoId(symbol);
-    const vsCurrency = symbol.split('/')[1]?.toLowerCase() || 'usd';
-    
-    const url = `${this.coingeckoBaseUrl}/simple/price?ids=${coinId}&vs_currencies=${vsCurrency}&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true`;
-    
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status} for ${symbol}`);
-    
-    const data = await res.json();
-    const price = data[coinId];
-    
-    if (!price) {
-      throw new Error(`No data for ${symbol} from CoinGecko`);
+    const res = await this.client.get('/market-data/ticker', {
+      symbols: symbol,
+    });
+
+    const item = res?.data?.find?.(t => t.symbol === symbol) || res?.data?.[0];
+    if (!item) {
+      throw new Error(`No ticker returned for ${symbol}`);
     }
-    
-    logger.info(`📊 Real market data from CoinGecko: ${symbol} = $${price[vsCurrency]}`);
-    
+
     return {
-      symbol,
-      bid: price[vsCurrency] * 0.999,        // Realistic bid/ask spread
-      ask: price[vsCurrency] * 1.001,
-      last: price[vsCurrency],
-      high: price[vsCurrency] * 1.05,
-      low: price[vsCurrency] * 0.95,
-      volume: price[`${vsCurrency}_24h_vol`] || 0,
-      change24h: price[`${vsCurrency}_24h_change`] || 0,
-      marketCap: price[`${vsCurrency}_market_cap`] || 0
+      symbol: item.symbol,
+      bid: this._safeNum(item.bid),
+      ask: this._safeNum(item.ask),
+      mid: this._safeNum(item.mid),
+      last: this._safeNum(item.last_price),
+      timestamp: item?.metadata?.timestamp || Date.now(),
     };
   }
 
   /**
-   * Get order book from CoinGecko (limited - real data)
+   * Real order book snapshot.
+   * Docs use path param symbol like BTC-USD and limit 1..20.
    */
-  async getOrderBook(symbol, depth = 20) {
-    const ticker = await this.getTicker(symbol);
-    const spread = (ticker.ask - ticker.bid) / 20;
+  async getOrderBook(symbol, depth = 10) {
+    const dashed = this._toDashedSymbol(symbol);
+    const limit = Math.min(Math.max(depth, 1), 20);
 
-    const bids = Array.from({ length: depth }, (_, i) => ({
-      price: (ticker.bid - (i + 1) * spread).toFixed(2),
-      size: (Math.random() * 10).toFixed(4)
-    }));
+    const res = await this.client.get(`/market-data/order-book/${dashed}`, { limit });
+    const data = res?.data;
 
-    const asks = Array.from({ length: depth }, (_, i) => ({
-      price: (ticker.ask + (i + 1) * spread).toFixed(2),
-      size: (Math.random() * 10).toFixed(4)
-    }));
+    if (!data) {
+      throw new Error(`No order book returned for ${symbol}`);
+    }
 
-    return { symbol, bids, asks };
+    const normalizeLevel = (level) => ({
+      price: this._safeNum(level.p ?? level.price),
+      size: this._safeNum(level.a ?? level.amount ?? level.size),
+      side: level.s ?? null,
+      assetId: level.aid ?? null,
+      assetName: level.anm ?? null,
+    });
+
+    return {
+      symbol,
+      bids: Array.isArray(data.bids) ? data.bids.map(normalizeLevel) : [],
+      asks: Array.isArray(data.asks) ? data.asks.map(normalizeLevel) : [],
+      timestamp: data?.metadata?.timestamp || Date.now(),
+    };
   }
 
   /**
-   * Get market trades from CoinGecko market chart data
+   * Real historical candles from Revolut X.
+   * Use these closes for RSI/MACD/Bollinger/EMA.
    */
-  async getRecentTrades(symbol) {
-    const coinId = this._getCoinGeckoId(symbol);
-    const vsCurrency = symbol.split('/')[1]?.toLowerCase() || 'usd';
-    
-    // Get last 90 days of prices (for technical indicators: need ≥26 closes for EMA-26)
-    const url = `${this.coingeckoBaseUrl}/coins/${coinId}/market_chart?vs_currency=${vsCurrency}&days=90`;
-    
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`CoinGecko market chart HTTP ${res.status}`);
-    
-    const data = await res.json();
-    const prices = data.prices || [];
-    
-    // Convert price history to simulated trades
-    const trades = prices.slice(-100).map((p, i) => ({
-      id: `trade-${Date.now()}-${i}`,
-      price: p[1].toFixed(2),
-      size: (Math.random() * 5).toFixed(4),
-      side: i > 0 && p[1] > prices[i-1][1] ? 'buy' : 'sell',
-      timestamp: new Date(p[0]).toISOString()
-    }));
+  async getCandles(symbol, {
+    interval = '1h',
+    limit = 120,
+    endDateMs,
+    startDateMs,
+  } = {}) {
+    const dashed = this._toDashedSymbol(symbol);
 
-    logger.info(`📊 Real market trades for ${symbol}: ${trades.length} price points`);
-    return { symbol, trades };
+    const end = endDateMs ?? Date.now();
+
+    // Fallback simple range if caller doesn't provide one.
+    // 120 candles of 1h ~= 5 days.
+    const start = startDateMs ?? (end - (limit * 60 * 60 * 1000));
+
+    const res = await this.client.get(`/market-data/candles/${dashed}`, {
+      interval,
+      start_date: start,
+      end_date: end,
+      limit,
+    });
+
+    const candles = Array.isArray(res?.data) ? res.data : [];
+
+    return {
+      symbol,
+      interval,
+      candles: candles.map(c => ({
+        timestamp: c.tdt ?? c.timestamp,
+        open: this._safeNum(c.o ?? c.open),
+        high: this._safeNum(c.h ?? c.high),
+        low: this._safeNum(c.l ?? c.low),
+        close: this._safeNum(c.c ?? c.close),
+        volume: this._safeNum(c.v ?? c.volume),
+      })),
+    };
   }
 
   /**
-   * Build a rich market snapshot (REAL DATA ONLY)
+   * Optional: public market trades.
+   * Useful for inspection, but indicators should use candles.
    */
+  async getPublicTrades(symbol, {
+    limit = 200,
+    endDateMs,
+    startDateMs,
+  } = {}) {
+    const dashed = this._toDashedSymbol(symbol);
+    const end = endDateMs ?? Date.now();
+    const start = startDateMs ?? (end - 24 * 60 * 60 * 1000);
+
+    const res = await this.client.get(`/trades/${dashed}`, {
+      start_date: start,
+      end_date: end,
+      limit,
+    });
+
+    return {
+      symbol,
+      trades: Array.isArray(res?.data) ? res.data.map((t, i) => ({
+        id: t.id ?? `trade-${i}`,
+        price: this._safeNum(t.p ?? t.price),
+        size: this._safeNum(t.a ?? t.amount ?? t.size),
+        side: t.s ?? null,
+        timestamp: t.tdt ?? t.timestamp,
+      })) : [],
+    };
+  }
+
   async getSnapshot(symbol) {
-    const [ticker, orderBook, trades] = await Promise.all([
+    const [ticker, orderBook, candles] = await Promise.all([
       this.getTicker(symbol),
       this.getOrderBook(symbol, 10),
-      this.getRecentTrades(symbol),
+      this.getCandles(symbol, { interval: '1h', limit: 120 }),
     ]);
 
-    return { symbol, ticker, orderBook, trades, fetchedAt: new Date().toISOString() };
+    logger.info(`📊 Snapshot loaded: ${symbol} | candles=${candles.candles.length}`);
+
+    return {
+      symbol,
+      ticker,
+      orderBook,
+      candles,
+      fetchedAt: new Date().toISOString(),
+    };
   }
 
-  /**
-   * Get account balances from Revolut X (real, or error)
-   */
   async getBalances() {
     return this.client.get('/balances');
   }
 
-  /**
-   * Get open orders from Revolut X (real)
-   */
-  async getOpenOrders() {
-    return this.client.get('/orders/active');
+  async getOpenOrders(symbols = []) {
+    return this.client.get('/orders/active', {
+      symbols: symbols.length ? symbols.join(',') : undefined,
+    });
   }
 
-  /**
-   * Get trade history from Revolut X (real)
-   */
-  async getTradeHistory(symbol, limit = 20) {
-    return this.client.get('/trades', { symbol, limit });
+  async getTradeHistory(symbol, {
+    startDateMs,
+    endDateMs,
+    limit = 100,
+  } = {}) {
+    const dashed = this._toDashedSymbol(symbol);
+    const end = endDateMs ?? Date.now();
+    const start = startDateMs ?? (end - 7 * 24 * 60 * 60 * 1000);
+
+    return this.client.get(`/trades/private/${dashed}`, {
+      start_date: start,
+      end_date: end,
+      limit,
+    });
   }
 }

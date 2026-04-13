@@ -35,3 +35,9 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
 
   return msg;
 }
+export function CronParse(expr) {
+   if(expr === '*/5 * * * *') return 'cada 5 minutos';
+  if(expr === '*/15 * * * *') return 'cada 15 minutos (predeterminado)';
+  if(expr === '0 * * * *') return 'cada hora';
+  if(expr === '0 */4 * * *') return 'cada 4 horas';
+}

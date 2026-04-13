@@ -1,38 +1,35 @@
 /**
  * agent/executor.js
- * Orchestrates one full agent cycle:
- *   1. Fetch market data + portfolio
- *   2. Compute indicators
- *   3. Ask Claude for decisions
- *   4. Execute orders (unless DRY_RUN)
- *   5. Notify via Telegram
+ * Orchestrates one full agent cycle.
+ *
+ * Fix vs previous:
+ *   - placeOrder now receives usdAmount directly (not qty calculated from price)
+ *     because orders.js uses quote_size internally
  */
 
 import { RevolutClient }    from '../revolut/client.js';
 import { MarketData }       from '../revolut/market.js';
 import { OrderManager }     from '../revolut/orders.js';
-import { computeIndicators, closesFromTrades } from './indicators.js';
-import { analyzeMarket }    from './analyzer.js';
+import { computeIndicators, closesFromCandles } from './context/indicators.js';
 import { notify, notifyError } from '../notifications/telegram.js';
 import { formatDecision }   from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
-import { 
-  connectDB, 
-  saveDecision, 
-  saveOrder, 
-  savePortfolioSnapshot, 
+import {
+  connectDB,
+  saveDecision,
+  saveOrder,
+  savePortfolioSnapshot,
   disconnectDB,
   getPreviousDecisions
 } from '../utils/mongodb.js';
+import { callAgentAnalyzer } from './services/clientAgent.js';
 
 export async function runAgentCycle(triggerReason = 'cron') {
   const startTime = Date.now();
-  const cycleId = `${triggerReason}-${Date.now()}`;
-  
   logger.info(`🤖 Agent cycle started (trigger: ${triggerReason})`);
 
   let dbConnected = false;
-  
+
   try {
     // ── 0. Connect to MongoDB ──────────────────────────────────────
     try {
@@ -40,309 +37,270 @@ export async function runAgentCycle(triggerReason = 'cron') {
       dbConnected = true;
       logger.debug('✅ MongoDB connected');
     } catch (err) {
-      logger.warn(`⚠️  MongoDB connection failed: ${err.message}. Continuing without persistence...`);
+      logger.warn(`⚠️  MongoDB unavailable: ${err.message}. Continuing without persistence...`);
     }
+
     // ── 1. Init clients ────────────────────────────────────────────
-    logger.debug('Initializing clients...');
-    
-    let client, market, orders;
-    try {
-      client = new RevolutClient();
-      market = new MarketData(client);
-      orders = new OrderManager(client);
-    } catch (err) {
-      throw new Error(`Client initialization failed: ${err.message}`);
-    }
+    const client = new RevolutClient();
+    const market = new MarketData(client);
+    const orders = new OrderManager(client);
 
-    // ── 2. Fetch market data in parallel ──────────────────────────
-    const pairs = process.env.TRADING_PAIRS.split(',').map(s => s.trim()).filter(p => p);
-    
-    if (pairs.length === 0) {
-      throw new Error('No trading pairs configured');
-    }
+    // ── 2. Fetch market data ───────────────────────────────────────
+    const pairs = process.env.TRADING_PAIRS.split(',').map(s => s.trim()).filter(Boolean);
+    if (pairs.length === 0) throw new Error('No trading pairs configured');
 
-    logger.info(`📊 Fetching data for ${pairs.length} pair(s): ${pairs.join(', ')}`);
+    logger.info(`📊 Fetching data for: ${pairs.join(', ')}`);
 
-    let balances, openOrders, snapshots;
-    try {
-      const results = await Promise.all([
-        market.getBalances(),
-        market.getOpenOrders(),
-        ...pairs.map(symbol => market.getSnapshot(symbol)),
-      ]);
-
-      balances = results[0];
-      openOrders = results[1];
-      snapshots = results.slice(2);
-      
-      logger.info(`✅ Market data fetched`);
-    } catch (err) {
+    const [balances, openOrders, ...snapshots] = await Promise.all([
+      market.getBalances(),
+      market.getOpenOrders(pairs),
+      ...pairs.map(symbol => market.getSnapshot(symbol)),
+    ]).catch(err => {
       throw new Error(`Failed to fetch market data: ${err.message}`);
-    }
+    });
 
-    // ── 3. Compute technical indicators for each pair ─────────────
-    logger.debug('Computing technical indicators...');
-    
+    // ── 3. Compute indicators ──────────────────────────────────────
     const indicators = {};
-    const indicatorErrors = [];
-    
+
     for (const snapshot of snapshots) {
       try {
-        // snapshot.trades is returned by getRecentTrades() as { symbol, trades: [...] }
-        const tradesArray = snapshot.trades?.trades || snapshot.trades || [];
-        const closes = closesFromTrades(tradesArray);
+        const candlesArray = snapshot.candles?.candles || snapshot.candles || [];
+        const closes = closesFromCandles(candlesArray);
         const computed = computeIndicators(closes);
-        
+
         if (computed.error) {
-          indicatorErrors.push(`${snapshot.symbol}: ${computed.error}`);
-          logger.warn(`⚠️  ${snapshot.symbol}: Not enough historical data`);
+          logger.warn(`⚠️ ${snapshot.symbol}: ${computed.error}`);
         } else {
           indicators[snapshot.symbol] = computed;
           logger.debug(`📈 ${snapshot.symbol}: RSI=${computed.rsi14}, MACD=${computed.macdLine}`);
         }
       } catch (err) {
-        indicatorErrors.push(`${snapshot.symbol}: ${err.message}`);
-        logger.error(`Failed to compute indicators for ${snapshot.symbol}`, err.message);
+        logger.error(`Indicators failed for ${snapshot.symbol}: ${err.message}`);
       }
     }
 
     if (Object.keys(indicators).length === 0) {
-      throw new Error(`No valid indicators computed. Errors: ${indicatorErrors.join('; ')}`);
+      throw new Error('No valid indicators computed — not enough historical data');
     }
 
-    // ── 4. Ask Claude ─────────────────────────────────────────────
+    // ── 4. Build optimized context for Claude ─────────────────────
+    const previousDecisionsBySymbol = {};
+    if (dbConnected) {
+      for (const snapshot of snapshots) {
+        try {
+          const prev = await getPreviousDecisions(snapshot.symbol, 3);
+          if (prev.length > 0) {
+            previousDecisionsBySymbol[snapshot.symbol] = prev.map(d => ({
+              timestamp:  d.created_at.toISOString(),
+              action:     d.action,
+              confidence: d.confidence,
+              reasoning:  d.reasoning?.substring(0, 80), 
+            }));
+          }
+        } catch { /* non-critical */ }
+      }
+    }
+
+    // ── Lean context — no raw snapshots, only processed data ──────
+    const compactPairs = snapshots.map(snapshot => ({
+      symbol: snapshot.symbol,
+      ticker: snapshot.ticker,
+      orderBookTop: {
+        bestBid: snapshot.orderBook?.bids?.[0] || null,
+        bestAsk: snapshot.orderBook?.asks?.[0] || null,
+        bidDepth: snapshot.orderBook?.bids?.length || 0,
+        askDepth: snapshot.orderBook?.asks?.length || 0,
+      },
+      recentCloses: (snapshot.candles?.candles || []).slice(-10).map(c => c.close),
+      fetchedAt: snapshot.fetchedAt,
+    }));
+    const relevantBalances = extractRelevantBalances(balances, pairs);
+
+    const analyzerContext = {
+      balances: relevantBalances,
+      openOrders: Array.isArray(openOrders?.data) ? openOrders.data.length : (openOrders?.length || 0),
+      pairs: compactPairs,
+      indicators,
+      previousDecisions: previousDecisionsBySymbol,
+    };
+
     logger.info('🧠 Sending context to Claude...');
-    
+    logger.debug('Context:', JSON.stringify(analyzerContext, null, 2));
     let decision;
     try {
-      // Retrieve previous decisions for each symbol to provide historical context
-      const previousDecisionsBySymbol = {};
-      if (dbConnected) {
-        for (const snapshot of snapshots) {
-          try {
-            const previous = await getPreviousDecisions(snapshot.symbol, 3);
-            if (previous.length > 0) {
-              previousDecisionsBySymbol[snapshot.symbol] = previous.map(d => ({
-                timestamp: d.created_at.toISOString(),
-                action: d.action,
-                confidence: d.confidence,
-                reasoning: d.reasoning
-              }));
-            }
-          } catch (err) {
-            logger.debug(`Could not retrieve previous decisions for ${snapshot.symbol}`);
-          }
-        }
-      }
-      
-      const context = { balances, openOrders, snapshots, indicators, previousDecisionsBySymbol };
-      decision = await analyzeMarket(context);
-      logger.info(`✅ Claude response received`);
+      decision = await callAgentAnalyzer(analyzerContext);
+      logger.info('✅ Claude decision received');
       logger.debug('Decision:', JSON.stringify(decision, null, 2));
     } catch (err) {
       throw new Error(`Claude analysis failed: ${err.message}`);
     }
 
-    // Validate Claude's response
     if (!decision || !Array.isArray(decision.decisions)) {
-      throw new Error(`Invalid decision format from Claude: ${JSON.stringify(decision)}`);
+      throw new Error(`Invalid decision format: ${JSON.stringify(decision)}`);
     }
 
-    // ── 4.5. Save decisions to MongoDB ─────────────────────────────
+    // ── 4.5 Save decisions to MongoDB ─────────────────────────────
     if (dbConnected) {
-      try {
-        logger.debug(`Attempting to save ${decision.decisions.length} decisions to MongoDB...`);
-        for (const d of decision.decisions) {
-          if (d.symbol) {
-            await saveDecision({
-              symbol: d.symbol,
-              action: d.action,
-              confidence: d.confidence,
-              reasoning: d.reasoning || '',
-              risks: d.risks || '',
-              usdAmount: parseFloat(d.usdAmount) || 0,
-              orderType: d.orderType || 'market',
-              takeProfit: d.takeProfit || null,
-              stopLoss: d.stopLoss || null
-            }, triggerReason);
-            logger.debug(`✅ Saved decision for ${d.symbol}`);
-          }
+      for (const d of decision.decisions) {
+        if (!d.symbol) continue;
+        try {
+          await saveDecision({
+            symbol:     d.symbol,
+            action:     d.action,
+            confidence: d.confidence,
+            reasoning:  d.reasoning || '',
+            risks:      d.risks     || '',
+            usdAmount:  parseFloat(d.usdAmount) || 0,
+            orderType:  d.orderType || 'market',
+            takeProfit: d.takeProfit || null,
+            stopLoss:   d.stopLoss  || null,
+          }, triggerReason);
+        } catch (err) {
+          logger.warn(`⚠️  Failed to save decision for ${d.symbol}: ${err.message}`);
         }
-        logger.info(`✅ Saved ${decision.decisions.length} decision(s) to MongoDB`);
-      } catch (err) {
-        logger.warn(`⚠️  Failed to save decisions to MongoDB: ${err.message}`);
-        logger.debug(`Stack: ${err.stack}`);
       }
-    } else {
-      logger.warn(`⚠️  MongoDB not connected - skipping decision save`);
     }
 
-    // ── 5. Execute decisions ──────────────────────────────────────
+    // ── 5. Execute decisions ───────────────────────────────────────
     const execResults = [];
     let executedCount = 0, skippedCount = 0, errorCount = 0;
 
     for (const d of decision.decisions) {
-      if (!d.symbol) {
-        logger.warn('⚠️  Skipping decision with no symbol');
-        continue;
-      }
+      if (!d.symbol) continue;
 
+      // ── Guards ────────────────────────────────────────────────
       if (d.action === 'HOLD') {
         execResults.push({ ...d, status: 'skipped', reason: 'HOLD decision' });
         skippedCount++;
-        logger.info(`⏭️  ${d.symbol}: HOLD (confidence: ${d.confidence}%)`);
         continue;
       }
 
       if (d.confidence < 55) {
-        execResults.push({ ...d, status: 'skipped', reason: `Confidence too low (${d.confidence})` });
+        execResults.push({ ...d, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
         skippedCount++;
-        logger.debug(`⏭️  ${d.symbol}: Confidence ${d.confidence}% < 55% threshold`);
         continue;
       }
 
       const usd = parseFloat(d.usdAmount);
-      if (isNaN(usd) || usd < parseFloat(process.env.MIN_ORDER || '50')) {
-        const minOrder = process.env.MIN_ORDER || '50';
-        execResults.push({ ...d, status: 'skipped', reason: `Order too small ($${usd} < $${minOrder})` });
+      const minOrder = parseFloat(process.env.MIN_ORDER || '10');
+      if (isNaN(usd) || usd < minOrder) {
+        execResults.push({ ...d, status: 'skipped', reason: `Amount $${usd} < minimum $${minOrder}` });
         skippedCount++;
-        logger.debug(`⏭️  ${d.symbol}: Order size $${usd} < minimum $${minOrder}`);
         continue;
       }
 
+      // ── Execute ───────────────────────────────────────────────
       try {
-        // Calculate quantity from USD amount and current price
         const currentPrice = indicators[d.symbol]?.currentPrice;
-        if (!currentPrice) {
-          throw new Error('No current price available');
-        }
+        if (!currentPrice) throw new Error('No current price in indicators');
 
-        const qty = OrderManager.calcQty(usd, currentPrice);
-        
-        // Calculate risk/reward metrics if TP/SL provided
         let rrMetrics = null;
         if (d.takeProfit && d.stopLoss) {
           rrMetrics = OrderManager.calcRiskReward(
-            currentPrice, 
-            parseFloat(d.takeProfit), 
-            parseFloat(d.stopLoss), 
+            currentPrice,
+            parseFloat(d.takeProfit),
+            parseFloat(d.stopLoss),
             d.action.toLowerCase()
           );
         }
-        
+
         logger.info(
-          `💼 Executing ${d.action} ${d.symbol}: $${usd} → ${qty} units` +
-          (rrMetrics ? ` | R/R: ${rrMetrics.riskRewardRatio} | TP: ${rrMetrics.tpDistance} SL: ${rrMetrics.slDistance}` : '')
+          `💼 ${d.action} ${d.symbol}: $${usd}` +
+          (rrMetrics ? ` | R/R: ${rrMetrics.riskRewardRatio}` : '')
         );
 
+        // ✅ Pass usdAmount directly — orders.js uses quote_size internally
         const orderResult = await orders.placeOrder({
-          symbol:      d.symbol,
-          side:        d.action.toLowerCase(),
-          type:        d.orderType ?? 'market',
-          qty,
-          price:       d.limitPrice,
-          takeProfit:  d.takeProfit,  // TP price (stored but needs separate handling)
-          stopLoss:    d.stopLoss     // SL price (stored but needs separate handling)
+          symbol:     d.symbol,
+          side:       d.action.toLowerCase(),
+          type:       d.orderType ?? 'market',
+          usdAmount:  usd,
+          price:      d.limitPrice,
+          takeProfit: d.takeProfit,
+          stopLoss:   d.stopLoss,
         });
 
-        execResults.push({ ...d, status: 'executed', qty, orderResult, rrMetrics });
+        execResults.push({ ...d, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
         executedCount++;
-        
-        // Log TP/SL info - noting that these need additional configuration
-        if (d.takeProfit || d.stopLoss) {
-          logger.info(
-            `⚠️  TP/SL Configuration Needed:\n` +
-            `   Entry: ${orderResult.payload?.order_configuration?.market?.base_size ? `≈$${parseFloat(d.usdAmount) / parseFloat(orderResult.payload.order_configuration.market.base_size)}` : 'Market'}\n` +
-            `   Take Profit: $${d.takeProfit} (${rrMetrics?.tpDistance})\n` +
-            `   Stop Loss: $${d.stopLoss} (${rrMetrics?.slDistance})\n` +
-            `   Action: Place OCO order OR set manually in Revolut X`
-          );
-        } else {
-          logger.info(`✅ ${d.symbol}: Order executed`);
-        }
 
-        // ─ Save order to MongoDB ──────────────────────────────────
+        // Save order to MongoDB
         if (dbConnected && orderResult) {
           try {
             await saveOrder({
-              symbol: d.symbol,
-              side: d.action.toLowerCase(),
-              orderType: d.orderType || 'market',
-              qty: qty.toString(),
-              price: orderResult.price || 0,
-              usdAmount: parseFloat(d.usdAmount) || 0,
-              revolutOrderId: orderResult.orderId || '',
-              takeProfit: d.takeProfit || null,
-              stopLoss: d.stopLoss || null,
+              symbol:          d.symbol,
+              side:            d.action.toLowerCase(),
+              orderType:       d.orderType || 'market',
+              qty:             orderResult.qty || '',
+              price:           currentPrice,
+              usdAmount:       usd,
+              revolutOrderId:  orderResult.venue_order_id || orderResult.orderId || '',
+              takeProfit:      d.takeProfit || null,
+              stopLoss:        d.stopLoss   || null,
               riskRewardRatio: rrMetrics?.riskRewardRatio || null,
-              status: 'executed'
+              status:          'executed',
             });
-            logger.debug(`💾 Saved order for ${d.symbol} to MongoDB with TP/SL`);
           } catch (err) {
-            logger.warn(`⚠️  Failed to save order to MongoDB: ${err.message}`);
+            logger.warn(`⚠️  Failed to save order: ${err.message}`);
           }
         }
       } catch (err) {
         execResults.push({ ...d, status: 'error', error: err.message });
         errorCount++;
-        logger.error(`❌ ${d.symbol}: Order failed`, err.message);
+        logger.error(`❌ ${d.symbol}: ${err.message}`);
         await notifyError(`Order failed for ${d.symbol}: ${err.message}`).catch(() => {});
       }
     }
 
-    // ── 6. Notify via Telegram ────────────────────────────────────
+    // ── 6. Notify via Telegram ─────────────────────────────────────
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    
-    logger.debug(`DEBUG: About to format decision. execResults: ${execResults.length} items`);
-    logger.debug(`DEBUG: decision keys: ${Object.keys(decision).join(', ')}`);
-    
     try {
       const message = formatDecision({ decision, execResults, elapsed, triggerReason });
-      logger.debug(`DEBUG: Formatted message length: ${message.length} chars`);
-      logger.debug(`DEBUG: First 100 chars: ${message.substring(0, 100)}`);
-      
       await notify(message);
-      logger.info(`📤 Telegram notification sent`);
+      logger.info('📤 Telegram notification sent');
     } catch (err) {
-      logger.error('Failed to send Telegram notification', err.message);
-      logger.debug(`Stack: ${err.stack}`);
+      logger.error('Failed to send Telegram notification:', err.message);
     }
 
-    // ── 7. Save portfolio snapshot to MongoDB ──────────────────────
+    // ── 7. Save portfolio snapshot ─────────────────────────────────
     if (dbConnected && balances) {
       try {
         await savePortfolioSnapshot(balances);
-        logger.debug('💾 Saved portfolio snapshot to MongoDB');
       } catch (err) {
         logger.warn(`⚠️  Failed to save portfolio snapshot: ${err.message}`);
       }
     }
 
-    // ── Summary ────────────────────────────────────────────────────
-    logger.info(
-      `✅ Cycle complete: ${executedCount} executed, ${skippedCount} skipped, ${errorCount} errors (${elapsed}s)`
-    );
-
-    return { decision, execResults, stats: { executedCount, skippedCount, errorCount, elapsedMs: Date.now() - startTime } };
+    logger.info(`✅ Cycle complete: ${executedCount} executed, ${skippedCount} skipped, ${errorCount} errors (${elapsed}s)`);
+    return { decision, execResults, stats: { executedCount, skippedCount, errorCount } };
 
   } catch (err) {
     const msg = `❌ Agent cycle failed: ${err.message}`;
-    logger.error(msg, err);
-    
-    await notifyError(msg).catch(() => {
-      logger.error('Failed to send error notification to Telegram', '');
-    });
-    
+    logger.error(msg);
+    await notifyError(msg).catch(() => {});
     throw err;
   } finally {
-    // Disconnect MongoDB
     if (dbConnected) {
-      try {
-        await disconnectDB();
-        logger.debug('✅ MongoDB disconnected');
-      } catch (err) {
-        logger.warn(`⚠️  Failed to disconnect MongoDB: ${err.message}`);
-      }
+      try { await disconnectDB(); } catch { /* ignore */ }
     }
   }
+}
+
+/**
+ * Extract only the balances relevant to the current trading pairs.
+ * Avoids sending the entire balances object (could be large) to Claude.
+ */
+function extractRelevantBalances(balances, pairs) {
+  if (!balances) return {};
+  const relevant = {};
+
+  // Always include USD
+  if (balances.USD !== undefined) relevant.USD = balances.USD;
+
+  // Include base asset of each pair (BTC, ETH, etc.)
+  for (const pair of pairs) {
+    const base = pair.split('/')[0];
+    if (balances[base] !== undefined) relevant[base] = balances[base];
+  }
+
+  return relevant;
 }

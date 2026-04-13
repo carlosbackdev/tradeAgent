@@ -19,7 +19,6 @@ export async function connectDB() {
   const dbName = process.env.MONGODB_DB || 'revolut-trading-agent';
 
   try {
-    logger.info(`Connecting to MongoDB: ${uri}`);
     
     client = new MongoClient(uri, {
       connectTimeoutMS: 5000,
@@ -31,7 +30,6 @@ export async function connectDB() {
 
     // Verify connection
     await db.admin().ping();
-    logger.info(`✅ Connected to MongoDB database: ${dbName}`);
 
     // Initialize collections
     await initializeCollections();
@@ -65,7 +63,6 @@ async function initializeCollections() {
     const snapshotsCollection = db.collection('portfolio_snapshots');
     await snapshotsCollection.createIndex({ created_at: -1 });
 
-    logger.debug('✅ Collections initialized with indexes');
   } catch (err) {
     logger.warn('Failed to initialize collections', err.message);
     // Don't throw - collections might already exist
@@ -197,7 +194,6 @@ export async function getPreviousDecisions(symbol, limit = 3) {
       .limit(limit)
       .toArray();
     
-    logger.debug(`📜 Retrieved ${decisions.length} previous decisions for ${symbol}`);
     return decisions;
   } catch (err) {
     logger.warn(`Failed to get previous decisions for ${symbol}: ${err.message}`);
@@ -211,7 +207,7 @@ export async function getPreviousDecisions(symbol, limit = 3) {
  * @param {Object} filter - Optional MongoDB filter
  * @returns {Array} Recent decisions
  */
-export async function getRecentDecisions(limit = 20, filter = {}) {
+export async function getRecentDecisions(limit = 5, filter = {}) {
   const db = await connectDB();
   const decisionsCollection = db.collection('decisions');
 
@@ -233,7 +229,7 @@ export async function getRecentDecisions(limit = 20, filter = {}) {
  * @param {Object} filter - Optional MongoDB filter
  * @returns {Array} Executed orders
  */
-export async function getExecutedOrders(limit = 20, filter = {}) {
+export async function getExecutedOrders(limit = 5, filter = {}) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
 
