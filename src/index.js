@@ -9,9 +9,9 @@
 import 'dotenv/config';
 import readline from 'readline';
 import { runAgentCycle } from './agent/executor.js';
-import { notify }        from './telegram/handles.js';
-import { validateConfig } from './utils/config.js';
-import { logger }        from './utils/logger.js';
+import { notify } from './telegram/handles.js';
+import { config, validateConfig } from './config/config.js';
+import { logger } from './utils/logger.js';
 import { startTelegramBot } from './telegram-bot.js';
 
 async function main() {
@@ -23,12 +23,12 @@ async function main() {
   }
 
   const isManualTrigger = process.argv.includes('--trigger');
-  const isDryRun        = process.env.DRY_RUN === 'true';
+  const isDryRun = config.debug.dryRun;
 
   console.log('═══════════════════════════════════════════════');
   console.log('  🤖 Revolut X Trading Agent');
   console.log('═══════════════════════════════════════════════');
-  console.log(`  Pairs:    ${process.env.TRADING_PAIRS}`);
+  console.log(`  Pairs:    ${config.trading.pairs.join(',')}`);
   console.log(`  Cron:     managed via Telegram /cron`);
   console.log(`  Dry run:  ${isDryRun}`);
   console.log(`  Node.js:  ${process.version}`);
@@ -46,7 +46,7 @@ async function main() {
       process.exit(0);
     } catch (err) {
       logger.error('❌ Manual trigger failed:', err.message);
-      await notify(`🚨 Manual trigger failed: ${err.message}`).catch(() => {});
+      await notify(`🚨 Manual trigger failed: ${err.message}`).catch(() => { });
       process.exit(1);
     }
   }
@@ -60,11 +60,11 @@ async function main() {
   console.log('   /cron off      — deactivate');
   console.log('   /cron */15 * * * *  — set new schedule\n');
 
-  process.on('SIGINT',  () => { console.log('\n👋 Shutting down...'); process.exit(0); });
-  process.on('SIGTERM', () => { console.log('\n👋 Terminating...');   process.exit(0); });
+  process.on('SIGINT', () => { console.log('\n👋 Shutting down...'); process.exit(0); });
+  process.on('SIGTERM', () => { console.log('\n👋 Terminating...'); process.exit(0); });
 
-  process.on('uncaughtException',    err => { logger.error('🔥 Uncaught:', err.message); process.exit(1); });
-  process.on('unhandledRejection',   err => { logger.error('🔥 Unhandled:', `${err}`);   process.exit(1); });
+  process.on('uncaughtException', err => { logger.error('🔥 Uncaught:', err.message); process.exit(1); });
+  process.on('unhandledRejection', err => { logger.error('🔥 Unhandled:', `${err}`); process.exit(1); });
 }
 
 main().catch(err => { console.error('🔥 Fatal:', err); process.exit(1); });
@@ -73,11 +73,11 @@ main().catch(err => { console.error('🔥 Fatal:', err); process.exit(1); });
 function selectCoin() {
   return new Promise(resolve => {
     const coins = [
-      { symbol: 'BTC', name: 'Bitcoin',      emoji: '₿'  },
-      { symbol: 'ETH', name: 'Ethereum',     emoji: '◇'  },
-      { symbol: 'SOL', name: 'Solana',       emoji: '◎'  },
+      { symbol: 'BTC', name: 'Bitcoin', emoji: '₿' },
+      { symbol: 'ETH', name: 'Ethereum', emoji: '◇' },
+      { symbol: 'SOL', name: 'Solana', emoji: '◎' },
       { symbol: 'VENICE', name: 'Venice Token', emoji: '🦋' },
-      { symbol: 'XRP', name: 'Ripple',       emoji: '✕'  },
+      { symbol: 'XRP', name: 'Ripple', emoji: '✕' },
     ];
 
     console.log('\n╔══════════════════════════════════╗');

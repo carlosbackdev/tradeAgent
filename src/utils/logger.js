@@ -3,6 +3,8 @@
  * Simple structured logging utility.
  */
 
+import { config } from '../config/config.js';
+
 const LOG_LEVELS = {
   debug: 0,
   info: 1,
@@ -11,7 +13,7 @@ const LOG_LEVELS = {
 };
 
 const levelNames = Object.keys(LOG_LEVELS);
-const currentLevel = LOG_LEVELS[process.env.LOG_LEVEL || 'info'];
+const currentLevel = LOG_LEVELS[config.debug.logLevel];
 
 function timestamp() {
   return new Date().toISOString();

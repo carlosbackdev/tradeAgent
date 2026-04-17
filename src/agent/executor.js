@@ -20,9 +20,11 @@ import {
   saveOrder,
   savePortfolioSnapshot,
   disconnectDB,
-  getPreviousDecisions
+  getPreviousDecisions,
+  getExecutedOrders
 } from '../utils/mongodb.js';
 import { callAgentAnalyzer } from './services/clientAgent.js';
+import { config } from '../config/config.js';
 
 export async function runAgentCycle(triggerReason = 'cron', coin) {
   const startTime = Date.now();
@@ -57,8 +59,15 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
     ]).catch(err => {
       throw new Error(`Failed to fetch market data: ${err.message}`);
     });
-    logger.info('📊 Open orders:', JSON.stringify(openOrders, null, 2));
-    logger.info('📊 Balances:', JSON.stringify(balances, null, 2));
+
+    const balanceArray = Array.isArray(balances) ? balances : (balances?.data || []);
+    const eurBalance = parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
+    const usdBalance = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
+    const totalFiat = eurBalance + usdBalance;
+
+    if (totalFiat < config.trading.minOrderUsd) {
+      await notify(`⚠️ Fondos insuficientes de EUR/USD ($${totalFiat.toFixed(2)}) para MIN_ORDER ($${config.trading.minOrderUsd}). Operaciones de BUY serán ignoradas, pero la gestión de ventas prosigue.`).catch(() => { });
+    }
 
     const snapshots = [snapshot];
 
@@ -86,6 +95,58 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       throw new Error('No valid indicators computed — not enough historical data');
     }
 
+    // ── 3.5 Check SL/TP and Last Order ─────────────────────────────
+    let lastOrder = null;
+    let forcedDecision = null;
+    let rendimiento = null;
+
+    if (dbConnected) {
+      try {
+        const querySymbol = { $in: [snapshot.symbol, snapshot.symbol.replace('-', '/')] };
+        const orders = await getExecutedOrders(1, { symbol: querySymbol, status: 'executed' });
+        if (orders.length > 0) {
+          lastOrder = orders[0];
+        }
+      } catch (err) {
+        logger.warn(`⚠️ Failed to fetch last order: ${err.message}`);
+      }
+    }
+
+    if (lastOrder && lastOrder.side === 'buy') {
+      const currentPrice = indicators[snapshot.symbol]?.currentPrice || snapshot.ticker.last;
+      if (currentPrice && lastOrder.price) {
+        const pnlPct = ((currentPrice - lastOrder.price) / lastOrder.price) * 100;
+        rendimiento = parseFloat(pnlPct.toFixed(2));
+
+        const tpPct = config.trading.takeProfitPct || 0;
+        const slPct = config.trading.stopLossPct || 0;
+
+        const baseCurrency = coin.split('-')[0];
+        const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
+        const usdWorth = baseBalance * currentPrice;
+
+        if (tpPct > 0 && pnlPct >= tpPct) {
+          forcedDecision = {
+            symbol: snapshot.symbol,
+            action: 'SELL',
+            confidence: 100,
+            reasoning: `Forced Take Profit met at +${pnlPct.toFixed(2)}% (Entry: $${lastOrder.price}, Current: $${currentPrice})`,
+            orderType: 'market',
+            usdAmount: usdWorth
+          };
+        } else if (slPct > 0 && pnlPct <= -slPct) {
+          forcedDecision = {
+            symbol: snapshot.symbol,
+            action: 'SELL',
+            confidence: 100,
+            reasoning: `Forced Stop Loss met at ${pnlPct.toFixed(2)}% (Entry: $${lastOrder.price}, Current: $${currentPrice})`,
+            orderType: 'market',
+            usdAmount: usdWorth
+          };
+        }
+      }
+    }
+
     // ── 4. Build optimized context for Claude ─────────────────────
     const previousDecisionsBySymbol = {};
     if (dbConnected) {
@@ -98,6 +159,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
               action: d.action,
               confidence: d.confidence,
               reasoning: d.reasoning?.substring(0, 80),
+              currentPnlPct: d.currentPnlPct !== undefined ? d.currentPnlPct : null,
             }));
           }
         } catch { /* non-critical */ }
@@ -118,7 +180,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       fetchedAt: snapshot.fetchedAt,
     }));
 
-    const relevantBalances = extractRelevantBalances(balances);
+    const relevantBalances = extractRelevantBalances(balances, indicators);
 
     // Extract open orders array (handle both formats)
     const openOrdersArray = Array.isArray(openOrders?.data)
@@ -131,19 +193,28 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       pairs: compactPairs,
       indicators,
       previousDecisions: previousDecisionsBySymbol,
+      lastExecutedOrder: lastOrder,
+      rendimiento: rendimiento
     };
 
-    logger.debug('Analyzer context:', JSON.stringify(analyzerContext, null, 2));
+    logger.info('Analyzer context:', JSON.stringify(analyzerContext, null, 2));
+    logger.info('Forced decision:', JSON.stringify(forcedDecision, null, 2));
+
 
     let decision;
-    try {
-      decision = await callAgentAnalyzer(analyzerContext);
+    if (forcedDecision) {
+      decision = { decisions: [forcedDecision] };
+      logger.info(`⚡ Bypassing Claude. Forced decision: ${forcedDecision.reasoning}`);
+    } else {
+      try {
+        decision = await callAgentAnalyzer(analyzerContext);
 
-      logger.info('✅ Claude decision received');
+        logger.info('✅ Claude decision received');
 
-      logger.debug('Decision:', JSON.stringify(decision, null, 2));
-    } catch (err) {
-      throw new Error(`Claude analysis failed: ${err.message}`);
+        logger.debug('Decision:', JSON.stringify(decision, null, 2));
+      } catch (err) {
+        throw new Error(`Claude analysis failed: ${err.message}`);
+      }
     }
 
     if (!decision || !Array.isArray(decision.decisions)) {
@@ -165,12 +236,14 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
             orderType: d.orderType || 'market',
             takeProfit: d.takeProfit || null,
             stopLoss: d.stopLoss || null,
+            rendimiento: rendimiento !== null ? rendimiento : null,
           }, triggerReason);
         } catch (err) {
           logger.warn(`⚠️  Failed to save decision for ${d.symbol}: ${err.message}`);
         }
       }
     }
+    logger.info('Decision:', JSON.stringify(decision, null, 2));
 
     // ── 5. Execute decisions ───────────────────────────────────────
     const execResults = [];
@@ -179,23 +252,53 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
     for (const d of decision.decisions) {
       if (!d.symbol) continue;
 
+      const pnlPctInfo = rendimiento !== null ? rendimiento : undefined;
+
       // ── Guards ────────────────────────────────────────────────
       if (d.action === 'HOLD') {
-        execResults.push({ ...d, status: 'skipped', reason: 'HOLD decision' });
+        execResults.push({ ...d, rendimiento: pnlPctInfo, status: 'skipped', reason: 'HOLD decision' });
         skippedCount++;
         continue;
       }
 
       if (d.confidence < 55) {
-        execResults.push({ ...d, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
+        execResults.push({ ...d, rendimiento: pnlPctInfo, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
         skippedCount++;
         continue;
       }
 
-      const usd = parseFloat(d.usdAmount);
-      const minOrder = parseFloat(process.env.MIN_ORDER || '10');
+      let usd = parseFloat(d.usdAmount);
+
+      // Auto-fill SELL orders with 100% balance if LLM forgets to specify it or sets 0
+      if (d.action === 'SELL' && (isNaN(usd) || usd === 0)) {
+        const baseCurrency = d.symbol.split('-')[0];
+        const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
+        const currentPrice = indicators[d.symbol]?.currentPrice || 0;
+        // Apply 99.5% buffer to avoid Revolut rounding/fee precision errors
+        usd = baseBalance * currentPrice * 0.999;
+        d.usdAmount = parseFloat(usd.toFixed(2));
+        logger.info(`💱 SELL auto-fill: ${baseBalance} ${baseCurrency} @ $${currentPrice} = $${d.usdAmount} (with 0.5% buffer)`);
+      }
+
+      // For any SELL, cap the amount to 99.5% of what we actually hold
+      // to avoid Revolut rejecting the order for precision/fee reasons
+      if (d.action === 'SELL') {
+        const baseCurrency = d.symbol.split('-')[0];
+        const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
+        const currentPrice = indicators[d.symbol]?.currentPrice || 0;
+        if (currentPrice > 0 && baseBalance > 0) {
+          const maxSellUsd = parseFloat((baseBalance * currentPrice * 0.999).toFixed(2));
+          if (usd > maxSellUsd) {
+            logger.info(`🛡️ SELL amount capped: $${usd} → $${maxSellUsd} (99.5% of ${baseBalance} ${baseCurrency})`);
+            usd = maxSellUsd;
+            d.usdAmount = usd;
+          }
+        }
+      }
+
+      const minOrder = config.trading.minOrderUsd;
       if (isNaN(usd) || usd < minOrder) {
-        execResults.push({ ...d, status: 'skipped', reason: `Amount $${usd} < minimum $${minOrder}` });
+        execResults.push({ ...d, rendimiento: pnlPctInfo, status: 'skipped', reason: `Amount $${usd} < minimum $${minOrder}` });
         skippedCount++;
         continue;
       }
@@ -232,7 +335,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
           stopLoss: d.stopLoss,
         });
 
-        execResults.push({ ...d, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
+        execResults.push({ ...d, rendimiento: pnlPctInfo, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
         executedCount++;
 
         // 🔔 Notify order execution immediately
@@ -269,7 +372,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
           }
         }
       } catch (err) {
-        execResults.push({ ...d, status: 'error', error: err.message });
+        execResults.push({ ...d, rendimiento: pnlPctInfo, status: 'error', error: err.message });
         errorCount++;
         logger.error(`❌ ${d.symbol}: ${err.message}`);
         await notifyError(`Order failed for ${d.symbol}: ${err.message}`).catch(() => { });
@@ -315,9 +418,15 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
  * Extract only the balances relevant to the current trading pairs.
  * Avoids sending the entire balances object (could be large) to Claude.
  */
-function extractRelevantBalances(balances) {
+function extractRelevantBalances(balances, indicators = {}) {
   if (!balances) return {};
-  const balancesMap = {};
+
+  const structured = {
+    crypto: {},
+    fiat: {}
+  };
+
+  const fiatCurrencies = ['USD', 'EUR', 'GBP'];
 
   // Handle both array and {data: []} formats
   const balanceArray = Array.isArray(balances) ? balances : (balances?.data || []);
@@ -328,8 +437,19 @@ function extractRelevantBalances(balances) {
     // ignorar balances vacíos
     if (total === 0) continue;
 
-    balancesMap[b.currency] = total;
+    if (fiatCurrencies.includes(b.currency)) {
+      structured.fiat[b.currency] = total;
+    } else {
+      // Encontrar el precio actual si la moneda está en el ciclo actual
+      const pairKey = Object.keys(indicators).find(k => k.startsWith(b.currency + '-'));
+      const currentPrice = pairKey ? indicators[pairKey].currentPrice : 0;
+
+      structured.crypto[b.currency] = {
+        amount: total,
+        estimatedUsdValue: currentPrice ? parseFloat((total * currentPrice).toFixed(2)) : null
+      };
+    }
   }
 
-  return balancesMap;
+  return structured;
 }

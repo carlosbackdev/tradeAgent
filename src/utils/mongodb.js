@@ -5,6 +5,7 @@
 
 import { MongoClient, Db } from 'mongodb';
 import { logger } from './logger.js';
+import { config } from '../config/config.js';
 
 let db = null;
 let client = null;
@@ -15,8 +16,8 @@ let client = null;
 export async function connectDB() {
   if (db) return db;
 
-  const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-  const dbName = process.env.MONGODB_DB || 'revolut-trading-agent';
+  const uri = config.mongodb.uri;
+  const dbName = config.mongodb.dbName;
 
   try {
     
@@ -90,7 +91,8 @@ export async function saveDecision(decision, trigger = 'cron') {
     usdAmount: decision.usdAmount,
     orderType: decision.orderType,
     takeProfit: decision.takeProfit || null,
-    stopLoss: decision.stopLoss || null
+    stopLoss: decision.stopLoss || null,
+    rendimiento: decision.rendimiento !== undefined ? decision.rendimiento : null
   };
 
   try {
@@ -188,8 +190,9 @@ export async function getPreviousDecisions(symbol, limit = 3) {
   const decisionsCollection = db.collection('decisions');
 
   try {
+    const querySymbol = { $in: [symbol, symbol.replace('-', '/'), symbol.replace('/', '-')] };
     const decisions = await decisionsCollection
-      .find({ symbol })
+      .find({ symbol: querySymbol })
       .sort({ created_at: -1 })
       .limit(limit)
       .toArray();

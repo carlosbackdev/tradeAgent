@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
+import { config } from '../config/config.js';
 
 let clockOffsetMs = 0;
 
@@ -22,15 +23,15 @@ function updateClockOffset(serverTimestampMs) {
 
 export class RevolutClient {
   constructor() {
-    this.baseUrl = process.env.REVOLUT_BASE_URL || 'https://revx.revolut.com';
-    this.apiKey = process.env.REVOLUT_API_KEY;
-    this.debugApi = process.env.DEBUG_API === 'true';
+    this.baseUrl = config.revolut.baseUrl;
+    this.apiKey = config.revolut.apiKey;
+    this.debugApi = config.debug.debugApi;
 
     if (!this.apiKey) {
       throw new Error('Missing REVOLUT_API_KEY');
     }
 
-    const keyPath = path.resolve(process.env.REVOLUT_PRIVATE_KEY_PATH || '');
+    const keyPath = path.resolve(config.revolut.privateKeyPath || '');
     if (!fs.existsSync(keyPath)) {
       throw new Error(`Private key not found at: ${keyPath}`);
     }

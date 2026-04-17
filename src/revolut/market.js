@@ -4,6 +4,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { config } from '../config/config.js';
 
 export class MarketData {
   constructor(client) {
@@ -160,7 +161,7 @@ export class MarketData {
     const [ticker, orderBook, candles] = await Promise.all([
       this.getTicker(symbol),
       this.getOrderBook(symbol, 10),
-      this.getCandles(symbol, { interval: process.env.INDICATORS_CANDLES_INTERVAL || 5 }),
+      this.getCandles(symbol, { interval: config.indicators.candlesInterval }),
     ]);
 
     logger.info(`📊 Snapshot loaded: ${symbol} | candles=${candles.candles.length}`);

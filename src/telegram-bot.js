@@ -3,7 +3,6 @@
  * Telegram bot with long-polling.
  *
  */
-import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import cron from 'node-cron';
@@ -11,15 +10,10 @@ import { runAgentCycle } from './agent/executor.js';
 import { logger } from './utils/logger.js';
 import { TelegramHandlers } from './telegram/telegram-handlers.js';
 import { TelegramCommands } from './telegram/commands.js';
-
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const ENV_PATH = path.join(process.cwd(), '.env');
+import { config } from './config/config.js';
 
 // ── Cron state (module-level singleton) ──────────────────────────
 let cronTask = null;   // node-cron scheduled task
-let cronSchedule = process.env.CRON_SCHEDULE || '*/15 * * * *';
-let cronEnabled = process.env.CRON_ENABLED === 'true';
 
 // ── Update offset for long polling ───────────────────────────────
 let updateOffset = 0;
@@ -30,13 +24,13 @@ const botContext = {
   sendMessage: (t, r) => sendMessage(t, r),
   editMessage: (m, t, r) => editMessage(m, t, r),
   answerCallback: (c, t) => answerCallback(c, t),
-  readEnvFile: () => readEnvFile(),
-  updateEnvFile: (k, v) => updateEnvFile(k, v),
+  readEnvFile: () => process.env, // Provide env vars for reading in configuration panel
+  updateEnvFile: (k, v) => config.update(k, v),
   startCron: (s) => startCron(s),
   stopCron: () => stopCron(),
   getCronStatus: () => getCronStatus(),
-  get cronSchedule() { return cronSchedule; },
-  set cronSchedule(s) { cronSchedule = s; }
+  get cronSchedule() { return config.cron.schedule; },
+  set cronSchedule(s) { config.update('CRON_SCHEDULE', s); }
 };
 
 const handlers = new TelegramHandlers(botContext);
@@ -47,7 +41,7 @@ const commandsRouter = new TelegramCommands(handlers, sendMessage);
 // ─────────────────────────────────────────────────────────────────
 
 async function telegramRequest(method, payload) {
-  const url = `https://api.telegram.org/bot${BOT_TOKEN}/${method}`;
+  const url = `https://api.telegram.org/bot${config.telegram.botToken}/${method}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -63,7 +57,7 @@ async function telegramRequest(method, payload) {
 
 async function sendMessage(text, replyMarkup = null) {
   if (!text?.trim()) return;
-  const payload = { chat_id: CHAT_ID, text: text.trim(), parse_mode: 'HTML' };
+  const payload = { chat_id: config.telegram.chatId, text: text.trim(), parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
   return telegramRequest('sendMessage', payload).catch(err =>
     logger.error('Telegram sendMessage failed:', err.message)
@@ -71,7 +65,7 @@ async function sendMessage(text, replyMarkup = null) {
 }
 
 async function editMessage(messageId, text, replyMarkup = null) {
-  const payload = { chat_id: CHAT_ID, message_id: messageId, text, parse_mode: 'HTML' };
+  const payload = { chat_id: config.telegram.chatId, message_id: messageId, text, parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
   return telegramRequest('editMessageText', payload).catch(err =>
     logger.error('Telegram editMessage failed:', err.message)
@@ -82,39 +76,6 @@ async function answerCallback(callbackQueryId, text = '✅') {
   return telegramRequest('answerCallbackQuery', {
     callback_query_id: callbackQueryId, text, show_alert: false,
   }).catch(() => { });
-}
-
-// ─────────────────────────────────────────────────────────────────
-//  .env helpers
-// ─────────────────────────────────────────────────────────────────
-
-function readEnvFile() {
-  try {
-    const env = {};
-    fs.readFileSync(ENV_PATH, 'utf-8').split('\n').forEach(line => {
-      line = line.trim();
-      if (!line || line.startsWith('#')) return;
-      const [key, ...rest] = line.split('=');
-      if (key) env[key.trim()] = rest.join('=').trim();
-    });
-    return env;
-  } catch { return {}; }
-}
-
-function updateEnvFile(key, value) {
-  try {
-    let content = fs.readFileSync(ENV_PATH, 'utf-8');
-    const regex = new RegExp(`^${key}=.*$`, 'm');
-    content = regex.test(content)
-      ? content.replace(regex, `${key}=${value}`)
-      : content + `\n${key}=${value}`;
-    fs.writeFileSync(ENV_PATH, content, 'utf-8');
-    process.env[key] = value;
-    return true;
-  } catch (err) {
-    logger.error(`updateEnvFile failed:`, err.message);
-    return false;
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -132,7 +93,7 @@ function startCron(schedule) {
   cronTask = cron.schedule(schedule, async () => {
     logger.info(`⏰ Cron triggered: ${schedule}`);
     try {
-      const pairs = process.env.TRADING_PAIRS.split(',').map(s => s.trim().replace('/', '-')).filter(Boolean);
+      const pairs = config.trading.pairs;
       for (const coin of pairs) {
         logger.info(`🔄 Processing coin: ${coin}`);
         await runAgentCycle('cron', coin);
@@ -142,28 +103,25 @@ function startCron(schedule) {
     }
   });
 
-  cronEnabled = true;
-  cronSchedule = schedule;
-  updateEnvFile('CRON_ENABLED', 'true');
-  updateEnvFile('CRON_SCHEDULE', schedule);
+  config.update('CRON_ENABLED', 'true');
+  config.update('CRON_SCHEDULE', schedule);
   logger.info(`✅ Cron started: ${schedule}`);
   return true;
 }
 
 function stopCron() {
   if (cronTask) { cronTask.stop(); cronTask = null; }
-  cronEnabled = false;
-  updateEnvFile('CRON_ENABLED', 'false');
+  config.update('CRON_ENABLED', 'false');
   logger.info('⏹ Cron stopped');
 }
 
 function getCronStatus() {
-  const next = cronEnabled && cronSchedule
-    ? `Próximo ciclo según: >${cronSchedule}>`
+  const next = config.cron.enabled && config.cron.schedule
+    ? `Próximo ciclo según: >${config.cron.schedule}>`
     : 'Desactivado';
   return {
-    enabled: cronEnabled,
-    schedule: cronSchedule,
+    enabled: config.cron.enabled,
+    schedule: config.cron.schedule,
     next,
   };
 }
@@ -174,7 +132,7 @@ function getCronStatus() {
 
 async function getUpdates() {
   try {
-    const url = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${updateOffset}&timeout=25`;
+    const url = `https://api.telegram.org/bot${config.telegram.botToken}/getUpdates?offset=${updateOffset}&timeout=25`;
     const res = await fetch(url);
     if (!res.ok) return [];
 
@@ -225,7 +183,7 @@ async function processUpdates() {
 // ─────────────────────────────────────────────────────────────────
 
 export async function startTelegramBot() {
-  if (!BOT_TOKEN || !CHAT_ID) {
+  if (!config.telegram.botToken || !config.telegram.chatId) {
     logger.warn('⚠️ Telegram not configured (missing BOT_TOKEN or CHAT_ID)');
     return;
   }
@@ -233,9 +191,9 @@ export async function startTelegramBot() {
   logger.info('🤖 Starting Telegram bot...');
 
   // Auto-start cron if enabled in env
-  if (cronEnabled && cron.validate(cronSchedule)) {
-    startCron(cronSchedule);
-    logger.info(`⏰ Auto-started cron: ${cronSchedule}`);
+  if (config.cron.enabled && cron.validate(config.cron.schedule)) {
+    startCron(config.cron.schedule);
+    logger.info(`⏰ Auto-started cron: ${config.cron.schedule}`);
   }
 
   await handlers.handleInit().catch(() => { });
@@ -254,5 +212,3 @@ export async function startTelegramBot() {
 
 export { startCron, stopCron, getCronStatus };
 export default startTelegramBot;
-
-// End of exported variables

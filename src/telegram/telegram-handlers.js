@@ -3,6 +3,8 @@ import { runAgentCycle } from '../agent/executor.js';
 import { logger } from '../utils/logger.js';
 import { CronParse } from '../utils/formatter.js';
 
+import { config } from '../config/config.js';
+
 const COINS = [
     { symbol: 'BTC', name: 'Bitcoin', emoji: '₿' },
     { symbol: 'ETH', name: 'Ethereum', emoji: '◇' },
@@ -11,14 +13,6 @@ const COINS = [
     { symbol: 'XRP', name: 'Ripple', emoji: '✕' },
 ];
 
-const EDITABLE_CONFIG = [
-    'REVOLUT_API_KEY', 'REVOLUT_BASE_URL',
-    'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
-    'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
-    'TRADING_PAIRS', 'MAX_TRADE_SIZE', 'MIN_ORDER',
-    'CRON_ENABLED', 'CRON_SCHEDULE',
-    'DRY_RUN', 'DEBUG_API', 'INDICATORS_CANDLES_INTERVAL'
-];
 
 // ── Cron presets ──────────────────────────────────────────────────
 const CRON_PRESETS = [
@@ -66,7 +60,7 @@ export class TelegramHandlers {
             ]
         };
 
-        const dry = process.env.DRY_RUN === 'true' ? '🔒 DRY_RUN' : '🔴 LIVE TRADING';
+        const dry = config.debug.dryRun ? '🔒 DRY_RUN' : '🔴 LIVE TRADING';
 
         await this.ctx.sendMessage(
             `🤖 Revolut x Trading Agent inicializado\n\n` +
@@ -154,16 +148,16 @@ Info:
     }
 
     async handleStatus() {
-        const dry = process.env.DRY_RUN === 'true' ? '🔒 DRY-RUN' : '🔴 REAL MONEY';
+        const dry = config.debug.dryRun ? '🔒 DRY-RUN' : '🔴 REAL MONEY';
         const cronSt = this.ctx.getCronStatus();
         let parseCron = CronParse(cronSt.schedule);
 
         await this.ctx.sendMessage(`📊 ESTADO ACTUAL
 
-🎯 Pares: >${process.env.TRADING_PAIRS}>
-💰 Max trade: >${(parseFloat(process.env.MAX_TRADE_SIZE || 0.1) * 100).toFixed(0)}%>
-💵 Min orden: >$${process.env.MIN_ORDER}>
-🧠 Modelo: >${process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5'}>
+🎯 Pares: >${config.trading.pairs.join(',')}>
+💰 Max trade: >${(config.trading.maxTradeSize * 100).toFixed(0)}%>
+💵 Min orden: >$${config.trading.minOrderUsd}>
+🧠 Modelo: >${config.anthropic.model}>
 
 ⏰ Cron: ${cronSt.enabled ? '✅ ACTIVO' : '⏸ INACTIVO'}
 📅 Schedule: >${parseCron}>
@@ -246,11 +240,19 @@ Ejemplos válidos:
     }
 
     async handleConfiguration() {
-        const envVars = this.ctx.readEnvFile();
+        const FALLBACK_KEYS = [
+            'REVOLUT_API_KEY', 'REVOLUT_BASE_URL', 'REVOLUT_PRIVATE_KEY_PATH',
+            'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
+            'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
+            'TRADING_PAIRS', 'MAX_TRADE_SIZE', 'MIN_ORDER', 'TAKE_PROFIT_PCT', 'STOP_LOSS_PCT',
+            'CRON_ENABLED', 'CRON_SCHEDULE', 'INDICATORS_CANDLES_INTERVAL',
+            'DRY_RUN', 'LOG_LEVEL', 'DEBUG_API', 'MONGODB_URI', 'MONGODB_DB'
+        ];
+        const keys = Array.isArray(config.editableKeys) ? config.editableKeys : FALLBACK_KEYS;
         let text = '⚙️ CONFIGURACIÓN EDITABLE\n\n';
 
-        EDITABLE_CONFIG.forEach((key, i) => {
-            const value = envVars[key] || process.env[key] || '(no configurado)';
+        keys.forEach((key, i) => {
+            const value = config.getRaw(key) || '(no configurado)';
             const display = key.includes('KEY') || key.includes('TOKEN')
                 ? value.substring(0, 10) + '...'
                 : value;
@@ -268,12 +270,13 @@ Ejemplos válidos:
         if (!this.configState.isConfiguring) return;
 
         if (!this.configState.selectedKey) {
+            const keys = config.editableKeys;
             const idx = parseInt(text.trim()) - 1;
-            if (isNaN(idx) || idx < 0 || idx >= EDITABLE_CONFIG.length) {
-                await this.ctx.sendMessage(`❌ Número inválido (1-${EDITABLE_CONFIG.length})`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+            if (isNaN(idx) || idx < 0 || idx >= keys.length) {
+                await this.ctx.sendMessage(`❌ Número inválido (1-${keys.length})`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
                 return;
             }
-            this.configState.selectedKey = EDITABLE_CONFIG[idx];
+            this.configState.selectedKey = keys[idx];
             await this.ctx.sendMessage(`✏️ ${this.configState.selectedKey}\n\nEscribe el nuevo valor:`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
             return;
         }
@@ -335,7 +338,7 @@ Ejemplos válidos:
         if (data === 'cron_now') {
             await this.ctx.editMessage(messageId, '⏳ Ejecutando ciclo ahora...');
             try {
-                const pairs = process.env.TRADING_PAIRS.split(',').map(s => s.trim().replace('/', '-')).filter(Boolean);
+                const pairs = config.trading.pairs;
                 for (const coin of pairs) {
                     await runAgentCycle('manual', coin);
                 }
@@ -353,7 +356,7 @@ Ejemplos válidos:
             const ok = this.ctx.startCron(expr);
             await this.ctx.editMessage(messageId,
                 ok
-                    ? `✅ Cron actualizado\nSchedule: ${CronParse(expr)}\nEstado: ACTIVO`
+                    ? `✅ Cron actualizado\nCiclo: ${CronParse(expr)}\nEstado: ACTIVO`
                     : `❌ Error con schedule: ${expr}`
             );
             return;

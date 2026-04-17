@@ -5,11 +5,12 @@
 
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger.js';
+import { config } from '../config/config.js';
 
 export class OrderManager {
   constructor(client) {
     this.client = client;
-    this.dryRun = process.env.DRY_RUN === 'true';
+    this.dryRun = config.debug.dryRun;
   }
 
   _toDashedSymbol(symbol) {

@@ -8,7 +8,9 @@ You receive processed market data for one or more trading pairs:
 - Current price, bid/ask spread, 24h change
 - Technical indicators: RSI(14), MACD, Bollinger Bands, EMA12/26
 - Portfolio balances (USD and crypto assets)
-- Previous decisions for context
+- previousDecisions: Recent historical context to avoid flip-flopping.
+- lastExecutedOrder: Full details of your previous executed order in this market.
+- rendimiento: The real-time unrealized Profit and Loss percentage relative to your last BUY entry price. Evaluate this to decide whether to Secure Profits or Cut Losses.
 
 Decide: BUY, SELL, or HOLD for each pair. Calculate TP/SL levels.
 

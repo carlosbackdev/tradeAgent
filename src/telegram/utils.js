@@ -1,14 +1,10 @@
 /**
  * telegram/utils.js
- * Telegram utilities and .env helpers
+ * Telegram utilities
  */
 
 import https from 'https';
-import fs from 'fs';
-import path from 'path';
 import { logger } from '../utils/logger.js';
-
-const ENV_PATH = path.join(process.cwd(), '.env');
 
 export function telegramRequest(botToken, method, payload) {
   return new Promise((resolve, reject) => {
@@ -62,35 +58,6 @@ export function createTelegramHelpers(botToken, chatId) {
       }).catch(() => {});
     },
   };
-}
-
-export function readEnvFile() {
-  try {
-    const env = {};
-    fs.readFileSync(ENV_PATH, 'utf-8').split('\n').forEach(line => {
-      line = line.trim();
-      if (!line || line.startsWith('#')) return;
-      const [key, ...rest] = line.split('=');
-      if (key) env[key.trim()] = rest.join('=').trim();
-    });
-    return env;
-  } catch { return {}; }
-}
-
-export function updateEnvFile(key, value) {
-  try {
-    let content = fs.readFileSync(ENV_PATH, 'utf-8');
-    const regex = new RegExp(`^${key}=.*$`, 'm');
-    content = regex.test(content)
-      ? content.replace(regex, `${key}=${value}`)
-      : content + `\n${key}=${value}`;
-    fs.writeFileSync(ENV_PATH, content, 'utf-8');
-    process.env[key] = value;
-    return true;
-  } catch (err) {
-    logger.error(`updateEnvFile failed:`, err.message);
-    return false;
-  }
 }
 
 export function getUpdates(botToken, updateOffset) {
