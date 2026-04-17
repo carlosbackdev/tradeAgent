@@ -113,37 +113,45 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
     }
 
     if (lastOrder && lastOrder.side === 'buy') {
-      const currentPrice = indicators[snapshot.symbol]?.currentPrice || snapshot.ticker.last;
-      if (currentPrice && lastOrder.price) {
-        const pnlPct = ((currentPrice - lastOrder.price) / lastOrder.price) * 100;
-        rendimiento = parseFloat(pnlPct.toFixed(2));
+      const baseCurrency = coin.split('-')[0];
+      const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
 
-        const tpPct = config.trading.takeProfitPct || 0;
-        const slPct = config.trading.stopLossPct || 0;
+      // Only consider the lastOrder valid if we actually hold the asset.
+      // If baseBalance === 0 the position is already closed — ignore it.
+      if (baseBalance > 0) {
+        const currentPrice = indicators[snapshot.symbol]?.currentPrice || snapshot.ticker.last;
+        if (currentPrice && lastOrder.price) {
+          const pnlPct = ((currentPrice - lastOrder.price) / lastOrder.price) * 100;
+          rendimiento = parseFloat(pnlPct.toFixed(2));
 
-        const baseCurrency = coin.split('-')[0];
-        const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
-        const usdWorth = baseBalance * currentPrice;
+          const tpPct = config.trading.takeProfitPct || 0;
+          const slPct = config.trading.stopLossPct || 0;
+          const usdWorth = baseBalance * currentPrice * 0.999;
 
-        if (tpPct > 0 && pnlPct >= tpPct) {
-          forcedDecision = {
-            symbol: snapshot.symbol,
-            action: 'SELL',
-            confidence: 100,
-            reasoning: `Forced Take Profit met at +${pnlPct.toFixed(2)}% (Entry: $${lastOrder.price}, Current: $${currentPrice})`,
-            orderType: 'market',
-            usdAmount: usdWorth
-          };
-        } else if (slPct > 0 && pnlPct <= -slPct) {
-          forcedDecision = {
-            symbol: snapshot.symbol,
-            action: 'SELL',
-            confidence: 100,
-            reasoning: `Forced Stop Loss met at ${pnlPct.toFixed(2)}% (Entry: $${lastOrder.price}, Current: $${currentPrice})`,
-            orderType: 'market',
-            usdAmount: usdWorth
-          };
+          if (tpPct > 0 && pnlPct >= tpPct) {
+            forcedDecision = {
+              symbol: snapshot.symbol,
+              action: 'SELL',
+              confidence: 100,
+              reasoning: `Forced Take Profit met at +${pnlPct.toFixed(2)}% (Entry: $${lastOrder.price}, Current: $${currentPrice})`,
+              orderType: 'market',
+              usdAmount: parseFloat(usdWorth.toFixed(2))
+            };
+          } else if (slPct > 0 && pnlPct <= -slPct) {
+            forcedDecision = {
+              symbol: snapshot.symbol,
+              action: 'SELL',
+              confidence: 100,
+              reasoning: `Forced Stop Loss met at ${pnlPct.toFixed(2)}% (Entry: $${lastOrder.price}, Current: $${currentPrice})`,
+              orderType: 'market',
+              usdAmount: parseFloat(usdWorth.toFixed(2))
+            };
+          }
         }
+      } else {
+        // No balance — treat lastOrder as stale, don't mislead Claude
+        logger.info(`ℹ️  No ${coin.split('-')[0]} balance — lastOrder from ${lastOrder.created_at?.toISOString?.() || '?'} treated as closed`);
+        lastOrder = null;
       }
     }
 
