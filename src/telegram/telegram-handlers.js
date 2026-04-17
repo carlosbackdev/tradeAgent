@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import { runAgentCycle } from '../agent/executor.js';
 import { logger } from '../utils/logger.js';
 import { CronParse } from '../utils/formatter.js';
-
+import { getTradingStats } from '../utils/mongodb.js';
 import { config } from '../config/config.js';
 
 const COINS = [
@@ -52,6 +52,7 @@ export class TelegramHandlers {
                 [
                     { text: '⏰ CRON', callback_data: '/cron' },
                     { text: '📊 STATUS', callback_data: '/status' },
+                    { text: '📈 TRADING STATS', callback_data: '/stats' },
                 ],
                 [
                     { text: '⚙️ CONFIG', callback_data: '/configuration' },
@@ -86,6 +87,7 @@ export class TelegramHandlers {
                 [
                     { text: '⏰ CRON', callback_data: '/cron' },
                     { text: '📊 STATUS', callback_data: '/status' },
+                    { text: '📈 TRADING STATS', callback_data: '/stats' },
                 ],
                 [
                     { text: '⚙️ CONFIG', callback_data: '/configuration' },
@@ -163,6 +165,29 @@ Info:
 📅 Schedule: >${parseCron}>
 
 ${dry}`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+    }
+
+    async handleTradingStats() {
+        const tradingStats = await getTradingStats();
+
+        if (!tradingStats) {
+            await this.ctx.sendMessage(
+                '❌ No se pudieron obtener las estadísticas',
+                { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
+            );
+            return;
+        }
+
+        await this.ctx.sendMessage(
+            `📊 ESTADÍSTICAS EN TRADING AGENT
+
+📌 Total decisions: ${tradingStats.totalDecisions}
+📌 Total executed orders: ${tradingStats.totalOrders}
+🟢 Total buys: ${tradingStats.totalBuys}
+🔴 Total sells: ${tradingStats.totalSells}
+📈 Rendimiento total: ${tradingStats.executionRate}`,
+            { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
+        );
     }
 
     async handleCron(args) {
@@ -311,6 +336,7 @@ Ejemplos válidos:
             if (data === '/status') return await this.handleStatus();
             if (data === '/configuration') return await this.handleConfiguration();
             if (data === '/cron') return await this.handleCron();
+            if (data === '/stats') return await this.handleTradingStats();
 
             const symbol = data.substring(1).toUpperCase();
             if (COINS.some(c => c.symbol === symbol)) {

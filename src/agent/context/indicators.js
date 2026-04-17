@@ -46,7 +46,7 @@ export function computeIndicators(closes) {
   const macd = last(macdValues) ?? {};
   const bb   = last(bbValues)   ?? {};
 
-  return {
+  const result = {
     currentPrice,
     rsi14:          last(rsiValues)?.toFixed(2),
     sma20:          last(sma20)?.toFixed(2),
@@ -74,6 +74,16 @@ export function computeIndicators(closes) {
     // Simple signals derived from indicators
     signals: deriveSignals({ currentPrice, rsi: last(rsiValues), macd, bb, ema12: last(ema12), ema26: last(ema26) }),
   };
+
+  // Compute confluence after signals are derived
+  result.confluence = computeConfluence({
+    rsi: last(rsiValues),
+    macdHistogram: macd.histogram,
+    bbPosition: result.bbPosition,
+    signals: result.signals
+  });
+
+  return result;
 }
 
 function deriveSignals({ currentPrice, rsi, macd, bb, ema12, ema26 }) {
@@ -103,6 +113,59 @@ function deriveSignals({ currentPrice, rsi, macd, bb, ema12, ema26 }) {
   }
 
   return signals;
+}
+
+/**
+ * Compute an objective confluence signal from the raw indicators.
+ * Returns bullish/bearish counts and a concrete suggestion for Claude.
+ */
+function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
+  const bullish = [];
+  const bearish = [];
+
+  // RSI
+  if (rsi !== undefined) {
+    if (rsi < 35)       bullish.push('RSI_oversold');
+    else if (rsi > 65)  bearish.push('RSI_overbought');
+  }
+
+  // MACD histogram direction
+  if (macdHistogram !== undefined) {
+    if (macdHistogram > 0) bullish.push('MACD_bullish_histogram');
+    else                   bearish.push('MACD_bearish_histogram');
+  }
+
+  // EMA cross
+  if (signals.includes('EMA_GOLDEN_CROSS')) bullish.push('EMA_golden_cross');
+  if (signals.includes('EMA_DEATH_CROSS'))  bearish.push('EMA_death_cross');
+
+  // MACD cross
+  if (signals.includes('MACD_BULLISH_CROSS')) bullish.push('MACD_bullish_cross');
+  if (signals.includes('MACD_BEARISH_CROSS')) bearish.push('MACD_bearish_cross');
+
+  // Bollinger Band position (numeric, strip '%')
+  const bbPct = parseFloat(bbPosition);
+  if (!isNaN(bbPct)) {
+    if (bbPct < 20)      bullish.push('BB_oversold_zone');
+    else if (bbPct > 80) bearish.push('BB_overbought_zone');
+  }
+
+  // BB price breakout signals
+  if (signals.includes('BB_PRICE_BELOW_LOWER')) bullish.push('BB_price_below_lower');
+  if (signals.includes('BB_PRICE_ABOVE_UPPER')) bearish.push('BB_price_above_upper');
+
+  const suggestion =
+    bullish.length >= 2 && bullish.length > bearish.length ? 'BUY_SIGNAL'
+    : bearish.length >= 2 && bearish.length > bullish.length ? 'SELL_SIGNAL'
+    : 'NEUTRAL';
+
+  return {
+    bullishCount:   bullish.length,
+    bearishCount:   bearish.length,
+    bullishSignals: bullish,
+    bearishSignals: bearish,
+    suggestion,     // Objective code-side hint for Claude
+  };
 }
 
 /**

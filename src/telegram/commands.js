@@ -35,6 +35,7 @@ export class TelegramCommands {
             case '/sol': await this.handlers.handleCoinCommand('SOL'); break;
             case '/venice': await this.handlers.handleCoinCommand('VENICE'); break;
             case '/xrp': await this.handlers.handleCoinCommand('XRP'); break;
+            case '/stats': await this.handlers.handleTradingStats(); break;
             default:
                 await this.sendMessage('❓ Comando no reconocido. Usa /help');
         }

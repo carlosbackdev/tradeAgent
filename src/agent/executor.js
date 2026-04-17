@@ -14,6 +14,7 @@ import { computeIndicators, closesFromCandles } from './context/indicators.js';
 import { notify, notifyError, notifyOrderExecuted } from '../telegram/handles.js';
 import { formatDecision } from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
+import { getTradingStats } from '../utils/mongodb.js';
 import {
   connectDB,
   saveDecision,
@@ -195,6 +196,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       ? openOrders.data
       : (Array.isArray(openOrders) ? openOrders : []);
 
+    const tradingStats = await getTradingStats();
+
     const analyzerContext = {
       balances: relevantBalances,
       openOrders: openOrdersArray,
@@ -202,7 +205,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       indicators,
       previousDecisions: previousDecisionsBySymbol,
       lastExecutedOrder: lastOrder,
-      rendimiento: rendimiento
+      rendimiento: rendimiento,
+      tradingStats: tradingStats
     };
 
     logger.info('Analyzer context:', JSON.stringify(analyzerContext, null, 2));

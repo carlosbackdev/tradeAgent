@@ -20,7 +20,7 @@ export async function connectDB() {
   const dbName = config.mongodb.dbName;
 
   try {
-    
+
     client = new MongoClient(uri, {
       connectTimeoutMS: 5000,
       serverSelectionTimeoutMS: 5000,
@@ -196,7 +196,7 @@ export async function getPreviousDecisions(symbol, limit = 3) {
       .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
-    
+
     return decisions;
   } catch (err) {
     logger.warn(`Failed to get previous decisions for ${symbol}: ${err.message}`);
@@ -268,7 +268,9 @@ export async function getTradingStats() {
       totalOrders,
       totalBuys,
       totalSells,
-      executionRate: totalOrders > 0 ? ((totalOrders / totalDecisions) * 100).toFixed(1) + '%' : '0%',
+      executionRate: totalDecisions > 0
+        ? ((totalOrders / totalDecisions) * 100).toFixed(1) + '%'
+        : '0%',
     };
   } catch (err) {
     logger.error('Failed to get trading stats', err.message);
