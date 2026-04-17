@@ -27,32 +27,32 @@ export class MarketData {
    * Get ticker data.
    * Ticker symbols are documented like BTC/USD. :contentReference[oaicite:2]{index=2}
    */
-async getTicker(symbol) {
-  const dashed = this._toDashedSymbol(symbol);
+  async getTicker(symbol) {
+    const dashed = this._toDashedSymbol(symbol);
 
-  const res = await this.client.get('/tickers', {
-    symbols: dashed,
-  });
+    const res = await this.client.get('/tickers', {
+      symbols: dashed,
+    });
 
-  const item =
-    res?.data?.find?.(t => t.symbol === dashed || t.symbol === symbol) ||
-    res?.data?.[0];
+    const item =
+      res?.data?.find?.(t => t.symbol === dashed || t.symbol === symbol) ||
+      res?.data?.[0];
 
-  logger.debug(`Ticker ${symbol}: ${JSON.stringify(item)}`);
+    logger.debug(`Ticker ${symbol}: ${JSON.stringify(item)}`);
 
-  if (!item) {
-    throw new Error(`No ticker returned for ${symbol}`);
+    if (!item) {
+      throw new Error(`No ticker returned for ${symbol}`);
+    }
+
+    return {
+      symbol,
+      bid: this._safeNum(item.bid),
+      ask: this._safeNum(item.ask),
+      mid: this._safeNum(item.mid),
+      last: this._safeNum(item.last_price),
+      timestamp: res?.metadata?.timestamp || Date.now(),
+    };
   }
-
-  return {
-    symbol,
-    bid: this._safeNum(item.bid),
-    ask: this._safeNum(item.ask),
-    mid: this._safeNum(item.mid),
-    last: this._safeNum(item.last_price),
-    timestamp: res?.metadata?.timestamp || Date.now(),
-  };
-}
 
   /**
    * Authenticated order book snapshot.
@@ -136,9 +136,9 @@ async getTicker(symbol) {
 
     const filtered = symbol
       ? trades.filter(t => {
-          const pair = `${t.aid}/${t.pc}`;
-          return pair === symbol;
-        })
+        const pair = `${t.aid}/${t.pc}`;
+        return pair === symbol;
+      })
       : trades;
 
     return {
@@ -179,11 +179,12 @@ async getTicker(symbol) {
   }
 
   async getOpenOrders(symbols = []) {
-    const dashedSymbols = symbols.map(symbol => this._toDashedSymbol(symbol));
-    
-    return this.client.get('/orders/active', {
-      symbols: dashedSymbols.length ? dashedSymbols.join(',') : undefined,
-    });
+    const params = {};
+    if (symbols && symbols.length > 0) {
+      const dashedSymbols = symbols.map(symbol => this._toDashedSymbol(symbol));
+      params.symbols = dashedSymbols.join(',');
+    }
+    return this.client.get('/orders/active', params);
   }
 
   async getTradeHistory(symbol, { fromMs, toMs, limit = 100 } = {}) {

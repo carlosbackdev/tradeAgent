@@ -16,7 +16,7 @@ export class OrderManager {
     return symbol.replace('/', '-');
   }
 
-  async placeOrder({ symbol, side, type, usdAmount, price, takeProfit, stopLoss }) {
+  async placeOrder({ symbol, side, type, usdAmount, price, currentPrice, takeProfit, stopLoss }) {
     if (!symbol || !side || !type || usdAmount === undefined || usdAmount === null) {
       throw new Error(`Missing order params: symbol=${symbol}, side=${side}, type=${type}, usdAmount=${usdAmount}`);
     }
@@ -29,8 +29,14 @@ export class OrderManager {
     const revolutSymbol = this._toDashedSymbol(symbol);
 
     let order_configuration;
+    let estimatedQty = null;
 
     if (type === 'market') {
+      // For market orders, estimate qty using currentPrice if available
+      const priceForQty = currentPrice || price;
+      if (priceForQty) {
+        estimatedQty = (usd / Number(priceForQty)).toFixed(8);
+      }
       order_configuration = {
         market: {
           quote_size: usd.toFixed(2),
@@ -43,6 +49,7 @@ export class OrderManager {
       }
 
       const cryptoQty = (usd / parsedPrice).toFixed(8);
+      estimatedQty = cryptoQty;
 
       order_configuration = {
         limit: {
@@ -72,6 +79,7 @@ export class OrderManager {
         side: payload.side,
         type,
         usdAmount: usd,
+        qty: estimatedQty,
         takeProfit: takeProfit || null,
         stopLoss: stopLoss || null,
         payload,
@@ -88,6 +96,7 @@ export class OrderManager {
       side: payload.side,
       type,
       usdAmount: usd,
+      qty: result?.data?.base_size || estimatedQty || result?.base_size,
       takeProfit: takeProfit || null,
       stopLoss: stopLoss || null,
     };

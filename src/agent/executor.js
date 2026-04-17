@@ -7,12 +7,12 @@
  *     because orders.js uses quote_size internally
  */
 
-import { RevolutClient }    from '../revolut/client.js';
-import { MarketData }       from '../revolut/market.js';
-import { OrderManager }     from '../revolut/orders.js';
+import { RevolutClient } from '../revolut/client.js';
+import { MarketData } from '../revolut/market.js';
+import { OrderManager } from '../revolut/orders.js';
 import { computeIndicators, closesFromCandles } from './context/indicators.js';
-import { notify, notifyError } from '../notifications/telegram.js';
-import { formatDecision }   from '../utils/formatter.js';
+import { notify, notifyError, notifyOrderExecuted } from '../telegram/handles.js';
+import { formatDecision } from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
 import {
   connectDB,
@@ -24,9 +24,9 @@ import {
 } from '../utils/mongodb.js';
 import { callAgentAnalyzer } from './services/clientAgent.js';
 
-export async function runAgentCycle(triggerReason = 'cron') {
+export async function runAgentCycle(triggerReason = 'cron', coin) {
   const startTime = Date.now();
-  logger.info(`🤖 Agent cycle started (trigger: ${triggerReason})`);
+  logger.info(`🤖 Agent cycle started (trigger: ${triggerReason}, coin: ${coin})`);
 
   let dbConnected = false;
 
@@ -46,18 +46,21 @@ export async function runAgentCycle(triggerReason = 'cron') {
     const orders = new OrderManager(client);
 
     // ── 2. Fetch market data ───────────────────────────────────────
-    const pairs = process.env.TRADING_PAIRS.split(',').map(s => s.trim()).filter(Boolean);
-    if (pairs.length === 0) throw new Error('No trading pairs configured');
+    if (!coin) throw new Error('No trading pair passed to runAgentCycle');
 
-    logger.info(`📊 Fetching data for: ${pairs.join(', ')}`);
+    logger.info(`📊 Fetching data for: ${coin}`);
 
-    const [balances, openOrders, ...snapshots] = await Promise.all([
+    const [balances, openOrders, snapshot] = await Promise.all([
       market.getBalances(),
-      market.getOpenOrders(pairs),
-      ...pairs.map(symbol => market.getSnapshot(symbol)),
+      market.getOpenOrders([coin]),
+      market.getSnapshot(coin),
     ]).catch(err => {
       throw new Error(`Failed to fetch market data: ${err.message}`);
     });
+    logger.info('📊 Open orders:', JSON.stringify(openOrders, null, 2));
+    logger.info('📊 Balances:', JSON.stringify(balances, null, 2));
+
+    const snapshots = [snapshot];
 
     // ── 3. Compute indicators ──────────────────────────────────────
     const indicators = {};
@@ -91,10 +94,10 @@ export async function runAgentCycle(triggerReason = 'cron') {
           const prev = await getPreviousDecisions(snapshot.symbol, 3);
           if (prev.length > 0) {
             previousDecisionsBySymbol[snapshot.symbol] = prev.map(d => ({
-              timestamp:  d.created_at.toISOString(),
-              action:     d.action,
+              timestamp: d.created_at.toISOString(),
+              action: d.action,
               confidence: d.confidence,
-              reasoning:  d.reasoning?.substring(0, 80), 
+              reasoning: d.reasoning?.substring(0, 80),
             }));
           }
         } catch { /* non-critical */ }
@@ -118,8 +121,8 @@ export async function runAgentCycle(triggerReason = 'cron') {
     const relevantBalances = extractRelevantBalances(balances);
 
     // Extract open orders array (handle both formats)
-    const openOrdersArray = Array.isArray(openOrders?.data) 
-      ? openOrders.data 
+    const openOrdersArray = Array.isArray(openOrders?.data)
+      ? openOrders.data
       : (Array.isArray(openOrders) ? openOrders : []);
 
     const analyzerContext = {
@@ -130,10 +133,12 @@ export async function runAgentCycle(triggerReason = 'cron') {
       previousDecisions: previousDecisionsBySymbol,
     };
 
+    logger.debug('Analyzer context:', JSON.stringify(analyzerContext, null, 2));
+
     let decision;
     try {
       decision = await callAgentAnalyzer(analyzerContext);
-      
+
       logger.info('✅ Claude decision received');
 
       logger.debug('Decision:', JSON.stringify(decision, null, 2));
@@ -151,15 +156,15 @@ export async function runAgentCycle(triggerReason = 'cron') {
         if (!d.symbol) continue;
         try {
           await saveDecision({
-            symbol:     d.symbol,
-            action:     d.action,
+            symbol: d.symbol,
+            action: d.action,
             confidence: d.confidence,
-            reasoning:  d.reasoning || '',
-            risks:      d.risks     || '',
-            usdAmount:  parseFloat(d.usdAmount) || 0,
-            orderType:  d.orderType || 'market',
+            reasoning: d.reasoning || '',
+            risks: d.risks || '',
+            usdAmount: parseFloat(d.usdAmount) || 0,
+            orderType: d.orderType || 'market',
             takeProfit: d.takeProfit || null,
-            stopLoss:   d.stopLoss  || null,
+            stopLoss: d.stopLoss || null,
           }, triggerReason);
         } catch (err) {
           logger.warn(`⚠️  Failed to save decision for ${d.symbol}: ${err.message}`);
@@ -217,33 +222,47 @@ export async function runAgentCycle(triggerReason = 'cron') {
 
         // ✅ Pass usdAmount directly — orders.js uses quote_size internally
         const orderResult = await orders.placeOrder({
-          symbol:     d.symbol,
-          side:       d.action.toLowerCase(),
-          type:       d.orderType ?? 'market',
-          usdAmount:  usd,
-          price:      d.limitPrice,
+          symbol: d.symbol,
+          side: d.action.toLowerCase(),
+          type: d.orderType ?? 'market',
+          usdAmount: usd,
+          price: d.limitPrice,
+          currentPrice: currentPrice,
           takeProfit: d.takeProfit,
-          stopLoss:   d.stopLoss,
+          stopLoss: d.stopLoss,
         });
 
         execResults.push({ ...d, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
         executedCount++;
 
+        // 🔔 Notify order execution immediately
+        try {
+          await notifyOrderExecuted({
+            symbol: d.symbol,
+            side: d.action.toLowerCase(),
+            qty: orderResult.qty || 'pte.',
+            usdAmount: usd.toFixed(2),
+            price: currentPrice.toFixed(2),
+          });
+        } catch (err) {
+          logger.warn(`⚠️  Failed to notify order execution: ${err.message}`);
+        }
+
         // Save order to MongoDB
         if (dbConnected && orderResult) {
           try {
             await saveOrder({
-              symbol:          d.symbol,
-              side:            d.action.toLowerCase(),
-              orderType:       d.orderType || 'market',
-              qty:             orderResult.qty || '',
-              price:           currentPrice,
-              usdAmount:       usd,
-              revolutOrderId:  orderResult.venue_order_id || orderResult.orderId || '',
-              takeProfit:      d.takeProfit || null,
-              stopLoss:        d.stopLoss   || null,
+              symbol: d.symbol,
+              side: d.action.toLowerCase(),
+              orderType: d.orderType || 'market',
+              qty: orderResult.qty || '',
+              price: currentPrice,
+              usdAmount: usd,
+              revolutOrderId: orderResult.venue_order_id || orderResult.orderId || '',
+              takeProfit: d.takeProfit || null,
+              stopLoss: d.stopLoss || null,
               riskRewardRatio: rrMetrics?.riskRewardRatio || null,
-              status:          'executed',
+              status: 'executed',
             });
           } catch (err) {
             logger.warn(`⚠️  Failed to save order: ${err.message}`);
@@ -253,7 +272,7 @@ export async function runAgentCycle(triggerReason = 'cron') {
         execResults.push({ ...d, status: 'error', error: err.message });
         errorCount++;
         logger.error(`❌ ${d.symbol}: ${err.message}`);
-        await notifyError(`Order failed for ${d.symbol}: ${err.message}`).catch(() => {});
+        await notifyError(`Order failed for ${d.symbol}: ${err.message}`).catch(() => { });
       }
     }
 
@@ -282,9 +301,10 @@ export async function runAgentCycle(triggerReason = 'cron') {
   } catch (err) {
     const msg = `❌ Agent cycle failed: ${err.message}`;
     logger.error(msg);
-    await notifyError(msg).catch(() => {});
+    await notifyError(msg).catch(() => { });
     throw err;
   } finally {
+
     if (dbConnected) {
       try { await disconnectDB(); } catch { /* ignore */ }
     }

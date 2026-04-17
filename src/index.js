@@ -9,7 +9,7 @@
 import 'dotenv/config';
 import readline from 'readline';
 import { runAgentCycle } from './agent/executor.js';
-import { notify }        from './notifications/telegram.js';
+import { notify }        from './telegram/handles.js';
 import { validateConfig } from './utils/config.js';
 import { logger }        from './utils/logger.js';
 import { startTelegramBot } from './telegram-bot.js';
@@ -40,10 +40,7 @@ async function main() {
       const coin = await selectCoin();
       logger.info(`🎯 Manual trigger: ${coin}/USD`);
 
-      const originalPairs = process.env.TRADING_PAIRS;
-      process.env.TRADING_PAIRS = `${coin}/USD`;
-      await runAgentCycle('manual');
-      process.env.TRADING_PAIRS = originalPairs;
+      await runAgentCycle('manual', `${coin}-USD`);
 
       logger.info('✅ Manual cycle completed');
       process.exit(0);
