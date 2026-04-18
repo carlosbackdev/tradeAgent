@@ -68,7 +68,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     const totalFiat = eurBalance + usdBalance;
 
     if (totalFiat < config.trading.minOrderUsd) {
-      await notify(`⚠️ Fondos insuficientes de EUR/USD ($${totalFiat.toFixed(2)}) para MIN_ORDER ($${config.trading.minOrderUsd}). Operaciones de BUY serán ignoradas, pero la gestión de ventas prosigue.`).catch(() => { });
+      await notify(`⚠️ Fondos en USD/EUR insuficientes ($${totalFiat.toFixed(2)}) para abrir nuevas posiciones (mínimo $${config.trading.minOrderUsd}). El agente seguirá monitorizando y cerrando ventas si es necesario.`).catch(() => { });
     }
 
     const snapshots = [snapshot];
@@ -316,11 +316,12 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       if (d.action === 'SELL' && (isNaN(usd) || usd === 0)) {
         const baseCurrency = d.symbol.split('-')[0];
         const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
-        const currentPrice = indicators[d.symbol]?.currentPrice || 0;
-        // 99.5% buffer for SELL auto-fills
-        usd = parseFloat((baseBalance * currentPrice * 0.998).toFixed(2));
+        const normalizedSymbol = d.symbol.replace('/', '-');
+        const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
+        // 98.5% buffer for SELL auto-fills to avoid 422 errors on wide spreads
+        usd = parseFloat((baseBalance * currentPrice * 0.985).toFixed(2));
         d.usdAmount = usd;
-        logger.info(`💱 SELL auto-fill: ${baseBalance} ${baseCurrency} @ $${currentPrice} ≈ $${d.usdAmount} (99.8% buffer)`);
+        logger.info(`💱 SELL auto-fill: ${baseBalance} ${baseCurrency} @ $${currentPrice} ≈ $${d.usdAmount} (98.5% buffer)`);
       }
 
       // ── Safety Buffers to avoid Revolut "Insufficient Balance" ($0.01 errors) ──
@@ -338,11 +339,12 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       if (d.action === 'SELL') {
         const baseCurrency = d.symbol.split('-')[0];
         const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
-        const currentPrice = indicators[d.symbol]?.currentPrice || 0;
+        const normalizedSymbol = d.symbol.replace('/', '-');
+        const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
         if (currentPrice > 0 && baseBalance > 0) {
-          const maxSellUsd = parseFloat((baseBalance * currentPrice * 0.995).toFixed(2)); // 99.5% for sell
+          const maxSellUsd = parseFloat((baseBalance * currentPrice * 0.985).toFixed(2)); // 98.5% for sell
           if (usd > maxSellUsd) {
-            logger.info(`🛡️ SELL amount capped: $${usd} → $${maxSellUsd} (99.5% for safety)`);
+            logger.info(`🛡️ SELL amount capped: $${usd} → $${maxSellUsd} (98.5% for safety)`);
             usd = maxSellUsd;
             d.usdAmount = usd;
           }
@@ -358,8 +360,9 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
 
       // ── Execute ───────────────────────────────────────────────
       try {
-        const currentPrice = indicators[d.symbol]?.currentPrice;
-        if (!currentPrice) throw new Error('No current price in indicators');
+        const normalizedSymbol = d.symbol.replace('/', '-');
+        const currentPrice = indicators[normalizedSymbol]?.currentPrice;
+        if (!currentPrice) throw new Error(`No current price in indicators for ${d.symbol}`);
 
         let rrMetrics = null;
         if (d.takeProfit && d.stopLoss) {

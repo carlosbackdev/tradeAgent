@@ -102,7 +102,7 @@ export class MarketData {
     logger.info(`Fetching candles for ${symbol} | interval=${interval}`);
 
     const to = toMs ?? Date.now();
-    const from = fromMs ?? (to - (120 * interval * 60 * 1000));
+    const from = fromMs ?? (to - (500 * interval * 60 * 1000));
 
     const res = await this.client.get(`/candles/${dashed}`, {
       interval,
