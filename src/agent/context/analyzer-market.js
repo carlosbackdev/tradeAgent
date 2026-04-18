@@ -5,10 +5,25 @@
 import { config } from '../../config/config.js';
 
 export function buildAnalyzerMessage(context) {
-  // Build a proper JSON structure that Claude can parse easily
+
+  const usableBalances = JSON.parse(JSON.stringify(context.balances || {}));
+
+  if (usableBalances.usd) {
+    usableBalances.usd = parseFloat((usableBalances.usd * 0.99).toFixed(2));
+  }
+
+  if (usableBalances.crypto) {
+    for (const coin in usableBalances.crypto) {
+      if (usableBalances.crypto[coin].estimatedUsdValue) {
+        usableBalances.crypto[coin].amount = usableBalances.crypto[coin].amount * 0.99;
+        usableBalances.crypto[coin].estimatedUsdValue = parseFloat((usableBalances.crypto[coin].estimatedUsdValue * 0.99).toFixed(2));
+      }
+    }
+  }
+
   const analysisData = {
     timestamp: new Date().toISOString(),
-    balances: context.balances || {},
+    balances: usableBalances,
     openOrders: Array.isArray(context.openOrders) ? context.openOrders : [],
     marketData: context.pairs || [],
     indicators: context.indicators || {},

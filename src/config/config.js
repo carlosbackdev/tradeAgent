@@ -28,6 +28,8 @@ class Config {
       minOrderUsd: parseFloat(process.env.MIN_ORDER || '50'),
       takeProfitPct: parseFloat(process.env.TAKE_PROFIT_PCT || '0'),
       stopLossPct: parseFloat(process.env.STOP_LOSS_PCT || '0'),
+      visionAgent: process.env.VISION_AGENT || 'short',
+      personalityAgent: process.env.PERSONALITY_AGENT || 'moderate',
     };
     this.cron = {
       enabled: process.env.CRON_ENABLED === 'true',
@@ -78,11 +80,15 @@ class Config {
     return [
       'REVOLUT_API_KEY', 'REVOLUT_BASE_URL', 'REVOLUT_PRIVATE_KEY_PATH',
       'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
-      'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
+      'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'
+    ];
+  }
+
+  get editableKeysAgent() {
+    return [
+      'VISION_AGENT', 'PERSONALITY_AGENT',
       'TRADING_PAIRS', 'MAX_TRADE_SIZE', 'MIN_ORDER', 'TAKE_PROFIT_PCT', 'STOP_LOSS_PCT',
-      'CRON_ENABLED', 'CRON_SCHEDULE', 'INDICATORS_CANDLES_INTERVAL',
-      'DRY_RUN', 'LOG_LEVEL', 'DEBUG_API',
-      'MONGODB_URI', 'MONGODB_DB',
+      'INDICATORS_CANDLES_INTERVAL'
     ];
   }
 
@@ -94,8 +100,6 @@ class Config {
       ['ANTHROPIC_API_KEY', this.anthropic.apiKey],
       ['TELEGRAM_BOT_TOKEN', this.telegram.botToken],
       ['TELEGRAM_CHAT_ID', this.telegram.chatId],
-      ['TRADING_PAIRS', this.trading.pairs.length > 0],
-      ['CRON_SCHEDULE', this.cron.schedule],
     ];
 
     const missing = required
@@ -117,9 +121,7 @@ class Config {
 }
 
 export const config = new Config();
-// Also export validateConfig separately for backwards compatibility if needed
-// or just export the instance that has validateConfig. 
-// Previously it was an exported function `export function validateConfig()`.
+
 export function validateConfig() {
   return config.validateConfig();
 }

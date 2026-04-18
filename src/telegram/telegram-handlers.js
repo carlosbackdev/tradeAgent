@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import { runAgentCycle } from '../agent/executor.js';
 import { logger } from '../utils/logger.js';
 import { CronParse } from '../utils/formatter.js';
-import { getTradingStats } from '../utils/mongodb.js';
+import { getTradingStats, getTradingPerformance } from '../utils/mongodb.js';
 import { config } from '../config/config.js';
 
 const COINS = [
@@ -55,7 +55,8 @@ export class TelegramHandlers {
                     { text: '📈 TRADING STATS', callback_data: '/stats' },
                 ],
                 [
-                    { text: '⚙️ CONFIG', callback_data: '/configuration' },
+                    { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
+                    { text: '⚙️ API CONFIG', callback_data: '/configuration' },
                     { text: '❓ HELP', callback_data: '/help' }
                 ]
             ]
@@ -90,7 +91,8 @@ export class TelegramHandlers {
                     { text: '📈 TRADING STATS', callback_data: '/stats' },
                 ],
                 [
-                    { text: '⚙️ CONFIG', callback_data: '/configuration' },
+                    { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
+                    { text: '⚙️ API CONFIG', callback_data: '/configuration' },
                     { text: '❓ HELP', callback_data: '/help' }
                 ]
             ]
@@ -150,27 +152,35 @@ Info:
     }
 
     async handleStatus() {
-        const dry = config.debug.dryRun ? '🔒 DRY-RUN' : '🔴 REAL MONEY';
+        const dry = config.debug.dryRun ? '🔒 DRY-RUN' : '🟢 REAL MONEY';
         const cronSt = this.ctx.getCronStatus();
         let parseCron = CronParse(cronSt.schedule);
 
-        await this.ctx.sendMessage(`📊 ESTADO ACTUAL
+        await this.ctx.sendMessage(`📊 ESTADO ACTUAL DEL AGENTE
 
-🎯 Pares: >${config.trading.pairs.join(',')}>
-💰 Max trade: >${(config.trading.maxTradeSize * 100).toFixed(0)}%>
-💵 Min orden: >$${config.trading.minOrderUsd}>
-🧠 Modelo: >${config.anthropic.model}>
+🎯 Pares: ${config.trading.pairs.join(',')}
+🧐 Personalidad: ${config.trading.personalityAgent}
+🔮 Vision: ${config.trading.visionAgent}
+🕯️ Velas: a ${config.indicators.candlesInterval} minutos
+
+💰 Max trade: ${(config.trading.maxTradeSize * 100).toFixed(0)}%
+💵 Min orden: $${config.trading.minOrderUsd}
+
+🎯 TP: ${config.trading.takeProfitPct}%
+🎯 SL: ${config.trading.stopLossPct}%
+
+🧠 Modelo: ${config.anthropic.model}
 
 ⏰ Cron: ${cronSt.enabled ? '✅ ACTIVO' : '⏸ INACTIVO'}
-📅 Schedule: >${parseCron}>
+📅 Ciclo: ${parseCron}
 
 ${dry}`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
     }
 
     async handleTradingStats() {
-        const tradingStats = await getTradingStats();
+        const stats = await getTradingPerformance();
 
-        if (!tradingStats) {
+        if (!stats) {
             await this.ctx.sendMessage(
                 '❌ No se pudieron obtener las estadísticas',
                 { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
@@ -178,14 +188,35 @@ ${dry}`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] 
             return;
         }
 
-        await this.ctx.sendMessage(
-            `📊 ESTADÍSTICAS EN TRADING AGENT
+        const openPos = stats.openPositions?.length > 0
+            ? '\n\n📂 POSICIONES ABIERTAS\n' + stats.openPositions.map(p =>
+                `  • ${p.symbol}: ${p.qty} @ $${p.avgPrice} (coste $${p.totalCost})`
+            ).join('\n')
+            : '';
 
-📌 Total decisions: ${tradingStats.totalDecisions}
-📌 Total executed orders: ${tradingStats.totalOrders}
-🟢 Total buys: ${tradingStats.totalBuys}
-🔴 Total sells: ${tradingStats.totalSells}
-📈 Rendimiento total: ${tradingStats.executionRate}`,
+        const accumRend = stats.accumulatedRendimiento;
+        const accumSign = accumRend > 0 ? '+' : '';
+        const accumEmoji = accumRend > 0 ? '🟢' : accumRend < 0 ? '🔴' : '⚪';
+
+        await this.ctx.sendMessage(
+            `📊 ESTADÍSTICAS TRADING AGENT
+
+🤔 Total decisions: ${stats.totalDecisions}
+📦 Total executed orders: ${stats.totalOrders}
+🛒 Total buys: ${stats.totalBuys}
+🤝🏻 Total sells: ${stats.totalSells}
+⚙️ Ratio de ejecución: ${stats.executionRate}
+
+💰 BENEFICIO / PÉRDIDA REALIZADO
+💵 PnL realizado: ${stats.totalRealizedPnL} USD
+📈 ROI realizado: ${stats.roiRealized}
+💹 Total invertido: $${stats.totalInvested}
+${accumEmoji} Rendimiento acumulado: ${accumSign}${accumRend}%
+
+🏆 Winning trades: ${stats.winningTrades}
+📉 Losing trades: ${stats.losingTrades}
+📊 Closed trades: ${stats.closedTrades}
+🎯 Win rate: ${stats.winRate}${openPos}`,
             { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
         );
     }
@@ -265,16 +296,8 @@ Ejemplos válidos:
     }
 
     async handleConfiguration() {
-        const FALLBACK_KEYS = [
-            'REVOLUT_API_KEY', 'REVOLUT_BASE_URL', 'REVOLUT_PRIVATE_KEY_PATH',
-            'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
-            'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
-            'TRADING_PAIRS', 'MAX_TRADE_SIZE', 'MIN_ORDER', 'TAKE_PROFIT_PCT', 'STOP_LOSS_PCT',
-            'CRON_ENABLED', 'CRON_SCHEDULE', 'INDICATORS_CANDLES_INTERVAL',
-            'DRY_RUN', 'LOG_LEVEL', 'DEBUG_API', 'MONGODB_URI', 'MONGODB_DB'
-        ];
-        const keys = Array.isArray(config.editableKeys) ? config.editableKeys : FALLBACK_KEYS;
-        let text = '⚙️ CONFIGURACIÓN EDITABLE\n\n';
+        const keys = config.editableKeys;
+        let text = '⚙️ CONFIGURACIÓN API\n\n';
 
         keys.forEach((key, i) => {
             const value = config.getRaw(key) || '(no configurado)';
@@ -287,6 +310,7 @@ Ejemplos válidos:
         text += `\n📝 Responde con el NÚMERO y luego el nuevo valor.\nEjemplo: 4 → claude-haiku-4-5`;
 
         this.configState.isConfiguring = true;
+        this.configState.mode = 'api';
         this.configState.selectedKey = null;
         await this.ctx.sendMessage(text, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
     }
@@ -295,13 +319,48 @@ Ejemplos válidos:
         if (!this.configState.isConfiguring) return;
 
         if (!this.configState.selectedKey) {
-            const keys = config.editableKeys;
+            const keys = this.configState.mode === 'agent'
+                ? config.editableKeysAgent
+                : config.editableKeys;
+
             const idx = parseInt(text.trim()) - 1;
             if (isNaN(idx) || idx < 0 || idx >= keys.length) {
                 await this.ctx.sendMessage(`❌ Número inválido (1-${keys.length})`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
                 return;
             }
-            this.configState.selectedKey = keys[idx];
+
+            const key = keys[idx];
+            this.configState.selectedKey = key;
+
+            // Interactive options for specific agent keys
+            if (key === 'VISION_AGENT') {
+                await this.ctx.sendMessage('🔭 Selecciona la VISIÓN del agente:', {
+                    inline_keyboard: [
+                        [
+                            { text: 'Short', callback_data: 'SET_AGENT_CFG:VISION_AGENT:short' },
+                            { text: 'Medium', callback_data: 'SET_AGENT_CFG:VISION_AGENT:medium' },
+                            { text: 'Long', callback_data: 'SET_AGENT_CFG:VISION_AGENT:long' }
+                        ],
+                        [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
+                    ]
+                });
+                return;
+            }
+
+            if (key === 'PERSONALITY_AGENT') {
+                await this.ctx.sendMessage('🧠 Selecciona la PERSONALIDAD del agente:', {
+                    inline_keyboard: [
+                        [
+                            { text: 'Conservative', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Conservative' },
+                            { text: 'Moderate', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Moderate' },
+                            { text: 'Aggressive', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Aggressive' }
+                        ],
+                        [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
+                    ]
+                });
+                return;
+            }
+
             await this.ctx.sendMessage(`✏️ ${this.configState.selectedKey}\n\nEscribe el nuevo valor:`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
             return;
         }
@@ -310,19 +369,41 @@ Ejemplos válidos:
         const value = text.trim();
         const ok = this.ctx.updateEnvFile(key, value);
 
-        if (key === 'CRON_SCHEDULE') this.ctx.cronSchedule = value;
-        if (key === 'CRON_ENABLED') {
-            value === 'true' ? this.ctx.startCron(this.ctx.cronSchedule) : this.ctx.stopCron();
-        }
-
         await this.ctx.sendMessage(ok
-            ? `✅ ${key} actualizado.\n\n/configuration para más cambios`
+            ? `✅ ${key} actualizado.\n\nRegresa al menú con /init`
             : `❌ Error guardando ${key}`,
             { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
         );
 
         this.configState.isConfiguring = false;
         this.configState.selectedKey = null;
+    }
+    async handleConfigurationAgent() {
+        const keys = config.editableKeysAgent;
+        let text = '⚙️ CONFIGURACIÓN AGENT\n\n';
+
+        keys.forEach((key, i) => {
+            const value = config.getRaw(key) || '(no configurado)';
+            if (key == 'INDICATORS_CANDLES_INTERVAL') {
+                text += `${i + 1}. ${key}: ${value} (min)\n`;
+            } else if (key == 'TAKE_PROFIT_PCT' || key == 'STOP_LOSS_PCT') {
+                text += `${i + 1}. ${key}: ${value} %\n`;
+            } else if (key == 'MIN_ORDER') {
+                text += `${i + 1}. ${key}: ${value} USD\n`;
+            }
+            else {
+                text += `${i + 1}. ${key}: ${value}\n`;
+            }
+        });
+
+        text += `\n📝 Responde con el NÚMERO y luego el nuevo valor SOLO NUMERICO.\nEjemplo: 8 → 20\n`;
+        text += `\n❓Para los Ciclos temporales se usan las monedas configuradas en TRADING_PAIRS se analizaran 
+        cada Ciclo de agente una a una de la lista compuesta.`;
+
+        this.configState.isConfiguring = true;
+        this.configState.mode = 'agent';
+        this.configState.selectedKey = null;
+        await this.ctx.sendMessage(text, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
     }
 
     async handleCallback(callbackQueryId, data, messageId) {
@@ -337,6 +418,7 @@ Ejemplos válidos:
             if (data === '/configuration') return await this.handleConfiguration();
             if (data === '/cron') return await this.handleCron();
             if (data === '/stats') return await this.handleTradingStats();
+            if (data === '/agent') return await this.handleConfigurationAgent();
 
             const symbol = data.substring(1).toUpperCase();
             if (COINS.some(c => c.symbol === symbol)) {
@@ -385,6 +467,20 @@ Ejemplos válidos:
                     ? `✅ Cron actualizado\nCiclo: ${CronParse(expr)}\nEstado: ACTIVO`
                     : `❌ Error con schedule: ${expr}`
             );
+            return;
+        }
+        if (data.startsWith('SET_AGENT_CFG:')) {
+            const [, key, value] = data.split(':');
+            const ok = this.ctx.updateEnvFile(key, value);
+
+            await this.ctx.editMessage(messageId, ok
+                ? `✅ ${key} actualizado a: *${value}*`
+                : `❌ Error actualizando ${key}`,
+                { parse_mode: 'Markdown', inline_keyboard: [[{ text: '🔙 VOLVER', callback_data: '/agent' }]] }
+            );
+
+            this.configState.isConfiguring = false;
+            this.configState.selectedKey = null;
             return;
         }
     }

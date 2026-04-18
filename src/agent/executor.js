@@ -14,7 +14,6 @@ import { computeIndicators, closesFromCandles } from './context/indicators.js';
 import { notify, notifyError, notifyOrderExecuted } from '../telegram/handles.js';
 import { formatDecision } from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
-import { getTradingStats } from '../utils/mongodb.js';
 import {
   connectDB,
   saveDecision,
@@ -22,7 +21,9 @@ import {
   savePortfolioSnapshot,
   disconnectDB,
   getPreviousDecisions,
-  getExecutedOrders
+  getExecutedOrders,
+  getTradingPerformance,
+  getDecisionById
 } from '../utils/mongodb.js';
 import { callAgentAnalyzer } from './services/clientAgent.js';
 import { config } from '../config/config.js';
@@ -107,9 +108,24 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
         const orders = await getExecutedOrders(1, { symbol: querySymbol, status: 'executed' });
         if (orders.length > 0) {
           lastOrder = orders[0];
+
+          if (lastOrder.decision_id) {
+            const decisionContext = await getDecisionById(lastOrder.decision_id);
+            if (decisionContext) {
+              lastOrder.decisionContext = {
+                reasoning: decisionContext.reasoning,
+                risks: decisionContext.risks,
+                action: decisionContext.action,
+                stopLoss: decisionContext.stopLoss,
+                takeProfit: decisionContext.takeProfit,
+                confidence: decisionContext.confidence,
+                created_at: decisionContext.created_at
+              };
+            }
+          }
         }
       } catch (err) {
-        logger.warn(`⚠️ Failed to fetch last order: ${err.message}`);
+        logger.warn(`⚠️ Failed to fetch last order context: ${err.message}`);
       }
     }
 
@@ -196,7 +212,19 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       ? openOrders.data
       : (Array.isArray(openOrders) ? openOrders : []);
 
-    const tradingStats = await getTradingStats();
+    const tradingStats = await getTradingPerformance();
+
+    // Send Claude only what it needs for decision-making — no noise
+    const tradingStatsForClaude = tradingStats ? {
+      winRate: tradingStats.winRate,
+      winningTrades: tradingStats.winningTrades,
+      losingTrades: tradingStats.losingTrades,
+      closedTrades: tradingStats.closedTrades,
+      // Use accumulated rendimiento (sum of stored sell %) instead of price-recalculated PnL
+      accumulatedRendimiento: tradingStats.accumulatedRendimiento,
+      // Only include positions with meaningful value (skip dust < $1)
+      openPositions: (tradingStats.openPositions || []).filter(p => p.totalCost >= 1),
+    } : null;
 
     const analyzerContext = {
       balances: relevantBalances,
@@ -206,7 +234,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       previousDecisions: previousDecisionsBySymbol,
       lastExecutedOrder: lastOrder,
       rendimiento: rendimiento,
-      tradingStats: tradingStats
+      tradingStats: tradingStatsForClaude
     };
 
     logger.info('Analyzer context:', JSON.stringify(analyzerContext, null, 2));
@@ -238,7 +266,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       for (const d of decision.decisions) {
         if (!d.symbol) continue;
         try {
-          await saveDecision({
+          const saved = await saveDecision({
             symbol: d.symbol,
             action: d.action,
             confidence: d.confidence,
@@ -250,6 +278,9 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
             stopLoss: d.stopLoss || null,
             rendimiento: rendimiento !== null ? rendimiento : null,
           }, triggerReason);
+
+          // Store the ID so we can link it to the order later
+          d.mongoDecisionId = saved?._id;
         } catch (err) {
           logger.warn(`⚠️  Failed to save decision for ${d.symbol}: ${err.message}`);
         }
@@ -281,27 +312,37 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
 
       let usd = parseFloat(d.usdAmount);
 
-      // Auto-fill SELL orders with 100% balance if LLM forgets to specify it or sets 0
+      // Auto-fill SELL orders if amount is missing/0
       if (d.action === 'SELL' && (isNaN(usd) || usd === 0)) {
         const baseCurrency = d.symbol.split('-')[0];
         const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
         const currentPrice = indicators[d.symbol]?.currentPrice || 0;
-        // Apply 99.5% buffer to avoid Revolut rounding/fee precision errors
-        usd = baseBalance * currentPrice * 0.999;
-        d.usdAmount = parseFloat(usd.toFixed(2));
-        logger.info(`💱 SELL auto-fill: ${baseBalance} ${baseCurrency} @ $${currentPrice} = $${d.usdAmount} (with 0.5% buffer)`);
+        // 99.5% buffer for SELL auto-fills
+        usd = parseFloat((baseBalance * currentPrice * 0.998).toFixed(2));
+        d.usdAmount = usd;
+        logger.info(`💱 SELL auto-fill: ${baseBalance} ${baseCurrency} @ $${currentPrice} ≈ $${d.usdAmount} (99.8% buffer)`);
       }
 
-      // For any SELL, cap the amount to 99.5% of what we actually hold
-      // to avoid Revolut rejecting the order for precision/fee reasons
+      // ── Safety Buffers to avoid Revolut "Insufficient Balance" ($0.01 errors) ──
+
+      if (d.action === 'BUY') {
+        const usdBalance = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
+        const maxAllowedBuy = parseFloat((usdBalance * 0.99).toFixed(2)); // Leave 1% for fees/slippage
+        if (usd > maxAllowedBuy) {
+          logger.info(`🛡️ BUY amount capped: $${usd} → $${maxAllowedBuy} (99% of balance to cover fees)`);
+          usd = maxAllowedBuy;
+          d.usdAmount = usd;
+        }
+      }
+
       if (d.action === 'SELL') {
         const baseCurrency = d.symbol.split('-')[0];
         const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
         const currentPrice = indicators[d.symbol]?.currentPrice || 0;
         if (currentPrice > 0 && baseBalance > 0) {
-          const maxSellUsd = parseFloat((baseBalance * currentPrice * 0.999).toFixed(2));
+          const maxSellUsd = parseFloat((baseBalance * currentPrice * 0.995).toFixed(2)); // 99.5% for sell
           if (usd > maxSellUsd) {
-            logger.info(`🛡️ SELL amount capped: $${usd} → $${maxSellUsd} (99.5% of ${baseBalance} ${baseCurrency})`);
+            logger.info(`🛡️ SELL amount capped: $${usd} → $${maxSellUsd} (99.5% for safety)`);
             usd = maxSellUsd;
             d.usdAmount = usd;
           }
@@ -366,7 +407,19 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
         // Save order to MongoDB
         if (dbConnected && orderResult) {
           try {
+            // For SELL orders: compute the REALIZED rendimiento % vs entry price.
+            // For BUY orders: nothing is realized yet, store null.
+            let orderRendimiento = null;
+            if (d.action.toLowerCase() === 'sell' && lastOrder?.price && currentPrice) {
+              // realized PnL% = (sellPrice - avgEntryPrice) / avgEntryPrice * 100
+              orderRendimiento = parseFloat(
+                (((currentPrice - lastOrder.price) / lastOrder.price) * 100).toFixed(2)
+              );
+              logger.info(`📊 Realised rendimiento for ${d.symbol}: ${orderRendimiento}% (entry $${lastOrder.price} → exit $${currentPrice})`);
+            }
+
             await saveOrder({
+              decisionId: d.mongoDecisionId,
               symbol: d.symbol,
               side: d.action.toLowerCase(),
               orderType: d.orderType || 'market',
@@ -378,6 +431,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
               stopLoss: d.stopLoss || null,
               riskRewardRatio: rrMetrics?.riskRewardRatio || null,
               status: 'executed',
+              rendimiento: orderRendimiento,  // null for BUY, realized% for SELL (can be negative)
             });
           } catch (err) {
             logger.warn(`⚠️  Failed to save order: ${err.message}`);
@@ -450,15 +504,22 @@ function extractRelevantBalances(balances, indicators = {}) {
     if (total === 0) continue;
 
     if (fiatCurrencies.includes(b.currency)) {
-      structured.fiat[b.currency] = total;
+      // Apply a 1% safety margin to USD so Claude doesn't overspend and trigger 422 errors
+      structured.fiat[b.currency] = b.currency === 'USD'
+        ? parseFloat((total * 0.99).toFixed(2))
+        : total;
     } else {
-      // Encontrar el precio actual si la moneda está en el ciclo actual
+      // Find current price if the currency is in this cycle
       const pairKey = Object.keys(indicators).find(k => k.startsWith(b.currency + '-'));
       const currentPrice = pairKey ? indicators[pairKey].currentPrice : 0;
+      const estimatedUsdValue = currentPrice ? parseFloat((total * currentPrice).toFixed(2)) : null;
+
+      // Skip dust balances worth less than $1 — they're irrelevant for decisions
+      if (estimatedUsdValue !== null && estimatedUsdValue < 1) continue;
 
       structured.crypto[b.currency] = {
         amount: total,
-        estimatedUsdValue: currentPrice ? parseFloat((total * currentPrice).toFixed(2)) : null
+        estimatedUsdValue
       };
     }
   }

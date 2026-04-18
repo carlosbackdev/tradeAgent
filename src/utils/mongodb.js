@@ -124,6 +124,7 @@ export async function saveOrder({
   riskRewardRatio,
   status,
   error,
+  rendimiento,
 }) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
@@ -143,6 +144,7 @@ export async function saveOrder({
     risk_reward_ratio: riskRewardRatio ? parseFloat(riskRewardRatio) : null,
     status,
     error: error || null,
+    rendimiento: rendimiento !== undefined ? parseFloat(rendimiento) : null,
   };
 
   try {
@@ -252,16 +254,22 @@ export async function getExecutedOrders(limit = 5, filter = {}) {
  * Get trading statistics
  * @returns {Object} Trading stats
  */
+/**
+ * Get trading statistics — counts from decisions + orders collections
+ * @returns {Object|null}
+ */
 export async function getTradingStats() {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
   const decisionsCollection = db.collection('decisions');
 
   try {
-    const totalOrders = await ordersCollection.countDocuments({ status: 'executed' });
-    const totalDecisions = await decisionsCollection.countDocuments();
-    const totalBuys = await ordersCollection.countDocuments({ side: 'buy', status: 'executed' });
-    const totalSells = await ordersCollection.countDocuments({ side: 'sell', status: 'executed' });
+    const [totalOrders, totalDecisions, totalBuys, totalSells] = await Promise.all([
+      ordersCollection.countDocuments({ status: 'executed' }),
+      decisionsCollection.countDocuments(),
+      ordersCollection.countDocuments({ side: 'buy', status: 'executed' }),
+      ordersCollection.countDocuments({ side: 'sell', status: 'executed' }),
+    ]);
 
     return {
       totalDecisions,
@@ -275,6 +283,172 @@ export async function getTradingStats() {
   } catch (err) {
     logger.error('Failed to get trading stats', err.message);
     return null;
+  }
+}
+
+/**
+ * Get full trading performance — PnL, win rate, open positions.
+ * Calculates realised P&L by walking through buy/sell pairs chronologically
+ * (FIFO average-cost method, per symbol).
+ * Also includes decision/order counts from getTradingStats.
+ * @returns {Object|null}
+ */
+export async function getTradingPerformance() {
+  const db = await connectDB();
+  const ordersCollection = db.collection('orders');
+  const decisionsCollection = db.collection('decisions');
+
+  try {
+    // Parallel: fetch all executed orders + decision count
+    const [orders, totalDecisions, sellOrdersWithRendimiento] = await Promise.all([
+      ordersCollection
+        .find({ status: 'executed', price: { $ne: null }, qty: { $ne: null } })
+        .sort({ created_at: 1 })
+        .toArray(),
+      decisionsCollection.countDocuments(),
+      // Sum rendimiento stored on SELL orders (realized PnL% per trade, can be negative)
+      ordersCollection
+        .find({ side: 'sell', status: 'executed', rendimiento: { $ne: null, $type: 'double' } })
+        .project({ rendimiento: 1 })
+        .toArray(),
+    ]);
+
+    // Accumulated rendimiento = sum of all stored sell rendimientos (+ adds, - subtracts)
+    const accumulatedRendimiento = parseFloat(
+      sellOrdersWithRendimiento
+        .reduce((sum, o) => sum + (Number(o.rendimiento) || 0), 0)
+        .toFixed(2)
+    );
+
+    // ── Walk orders chronologically, tracking per-symbol positions ──
+    const positions = {};
+    let totalRealizedPnL = 0;
+    let totalInvested = 0;
+    let totalBuys = 0;
+    let totalSells = 0;
+    let winningTrades = 0;
+    let losingTrades = 0;
+
+    for (const order of orders) {
+      // Normalise symbol: treat BTC/USD and BTC-USD as the same position
+      const symbol = (order.symbol || '').replace('/', '-');
+      const qty = Number(order.qty);
+      const price = Number(order.price);
+
+      // Skip corrupted/legacy records with non-numeric qty or price
+      if (!symbol || isNaN(qty) || qty <= 0 || isNaN(price) || price <= 0) {
+        logger.warn(`⚠️ Skipping invalid order ${order._id}: qty=${order.qty} price=${order.price}`);
+        continue;
+      }
+
+      if (!positions[symbol]) {
+        positions[symbol] = { qty: 0, totalCost: 0, avgPrice: 0, realizedPnL: 0 };
+      }
+
+      const pos = positions[symbol];
+
+      if (order.side === 'buy') {
+        pos.totalCost += qty * price;
+        pos.qty += qty;
+        pos.avgPrice = pos.qty > 0 ? pos.totalCost / pos.qty : 0;
+        totalInvested += qty * price;
+        totalBuys++;
+      }
+
+      if (order.side === 'sell') {
+        totalSells++;
+        // Never sell more than we hold to avoid negative positions
+        const sellQty = Math.min(qty, pos.qty);
+
+        if (sellQty > 0) {
+          const pnl = (price - pos.avgPrice) * sellQty;
+          pos.realizedPnL += pnl;
+          totalRealizedPnL += pnl;
+
+          if (pnl > 0) winningTrades++;
+          else if (pnl < 0) losingTrades++;
+
+          pos.qty -= sellQty;
+          pos.totalCost -= pos.avgPrice * sellQty;
+
+          if (pos.qty <= 0) {
+            pos.qty = 0;
+            pos.totalCost = 0;
+            pos.avgPrice = 0;
+          }
+        }
+      }
+    }
+
+    const totalOrders = totalBuys + totalSells;
+    const closedTrades = winningTrades + losingTrades;
+
+    return {
+      // ── Order / decision counts ──
+      totalDecisions,
+      totalOrders,
+      totalBuys,
+      totalSells,
+      executionRate: totalDecisions > 0
+        ? ((totalOrders / totalDecisions) * 100).toFixed(1) + '%'
+        : '0%',
+      // ── Realised PnL ──
+      totalRealizedPnL: Number(totalRealizedPnL.toFixed(2)),
+      totalInvested: Number(totalInvested.toFixed(2)),
+      roiRealized: totalInvested > 0
+        ? ((totalRealizedPnL / totalInvested) * 100).toFixed(2) + '%'
+        : '0%',
+      // ── Win/loss stats ──
+      winningTrades,
+      losingTrades,
+      closedTrades,
+      winRate: closedTrades > 0
+        ? ((winningTrades / closedTrades) * 100).toFixed(1) + '%'
+        : '0%',
+      // ── Open positions still holding inventory (skip dust < $1) ──
+      openPositions: Object.entries(positions)
+        .filter(([, p]) => p.qty > 0 && p.totalCost >= 1)
+        .map(([symbol, p]) => ({
+          symbol,
+          qty: Number(p.qty.toFixed(8)),
+          avgPrice: Number(p.avgPrice.toFixed(8)),
+          totalCost: Number(p.totalCost.toFixed(2))
+        })),
+      // ── Accumulated rendimiento from stored sell orders (sum, can be negative) ──
+      // This is the simple sum of each trade's realized % stored at execution time.
+      accumulatedRendimiento,
+    };
+  } catch (err) {
+    logger.error('Failed to get trading performance', err.message);
+    return null;
+  }
+}
+
+/**
+ * Get the accumulated rendimiento by summing all stored rendimiento values
+ * from SELL orders. Positive trades add, negative trades subtract.
+ * Returns a float (can be negative) or 0 if no data.
+ * @returns {number}
+ */
+export async function getAccumulatedRendimiento() {
+  const db = await connectDB();
+  const ordersCollection = db.collection('orders');
+
+  try {
+    const sellOrders = await ordersCollection
+      .find({
+        side: 'sell',
+        status: 'executed',
+        rendimiento: { $ne: null, $type: 'double' }
+      })
+      .project({ rendimiento: 1 })
+      .toArray();
+
+    const total = sellOrders.reduce((sum, o) => sum + (Number(o.rendimiento) || 0), 0);
+    return parseFloat(total.toFixed(2));
+  } catch (err) {
+    logger.error('Failed to get accumulated rendimiento', err.message);
+    return 0;
   }
 }
 
@@ -298,4 +472,27 @@ export function getDB() {
     throw new Error('Database not connected. Call connectDB() first.');
   }
   return db;
+}
+
+/**
+ * Get a specific decision by its ID
+ * @param {any} id - Database ID (string or ObjectId)
+ * @returns {Promise<Object|null>}
+ */
+export async function getDecisionById(id) {
+  if (!id) return null;
+  try {
+    const db = await connectDB();
+    const decisionsCollection = db.collection('decisions');
+    
+    // Dynamic import to avoid circular dependencies or top-level issues if needed,
+    // though here we just need it for the constructor.
+    const { ObjectId } = await import('mongodb');
+    const queryId = (typeof id === 'string') ? new ObjectId(id) : id;
+    
+    return await decisionsCollection.findOne({ _id: queryId });
+  } catch (err) {
+    logger.warn(`⚠️ Failed to get decision by ID ${id}: ${err.message}`);
+    return null;
+  }
 }

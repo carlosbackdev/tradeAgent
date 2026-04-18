@@ -10,7 +10,6 @@ import {
   EMA,
   MACD,
   BollingerBands,
-  ADX,
 } from 'technicalindicators';
 
 /**
@@ -40,10 +39,13 @@ export function computeIndicators(closes) {
     stdDev: 2,
   });
 
-  // Grab the latest value of each series
+  // Helpers to grab latest values
   const last = (arr) => arr[arr.length - 1];
+  const secondLast = (arr) => arr[arr.length - 2];
+
   const currentPrice = last(closes);
   const macd = last(macdValues) ?? {};
+  const prevMacd = secondLast(macdValues) ?? {};
   const bb   = last(bbValues)   ?? {};
 
   const result = {
@@ -72,7 +74,15 @@ export function computeIndicators(closes) {
                       : null,
 
     // Simple signals derived from indicators
-    signals: deriveSignals({ currentPrice, rsi: last(rsiValues), macd, bb, ema12: last(ema12), ema26: last(ema26) }),
+    signals: deriveSignals({ 
+      currentPrice, 
+      rsi: last(rsiValues), 
+      macd, 
+      prevMacd, 
+      bb, 
+      ema12: last(ema12), 
+      ema26: last(ema26)
+    }),
   };
 
   // Compute confluence after signals are derived
@@ -86,7 +96,7 @@ export function computeIndicators(closes) {
   return result;
 }
 
-function deriveSignals({ currentPrice, rsi, macd, bb, ema12, ema26 }) {
+function deriveSignals({ currentPrice, rsi, macd, prevMacd, bb, ema12, ema26 }) {
   const signals = [];
 
   if (rsi !== undefined) {
@@ -99,7 +109,13 @@ function deriveSignals({ currentPrice, rsi, macd, bb, ema12, ema26 }) {
   if (macd?.MACD !== undefined && macd?.signal !== undefined) {
     if (macd.MACD > macd.signal) signals.push('MACD_BULLISH_CROSS');
     else signals.push('MACD_BEARISH_CROSS');
-    if (macd.histogram > 0 && macd.histogram > (macd.prevHistogram ?? 0)) signals.push('MACD_MOMENTUM_INCREASING');
+    
+    // Proper momentum check comparing to previous histogram
+    if (macd.histogram > (prevMacd.histogram || 0)) {
+        signals.push('MACD_MOMENTUM_INCREASING');
+    } else {
+        signals.push('MACD_MOMENTUM_DECREASING');
+    }
   }
 
   if (bb?.upper && bb?.lower) {
@@ -164,24 +180,19 @@ function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
     bearishCount:   bearish.length,
     bullishSignals: bullish,
     bearishSignals: bearish,
-    suggestion,     // Objective code-side hint for Claude
+    suggestion,     
   };
 }
 
 /**
  * Extract close prices from trade history.
- * Handles CoinGecko format: trades array with price tuples [timestamp, price]
- * Handles Revolut format: trades array with { price: "...", ... }
  */
 export function closesFromTrades(trades) {
   if (!trades || !Array.isArray(trades)) return [];
   
   return trades.map(t => {
-    // CoinGecko: [timestamp, price] tuple
     if (Array.isArray(t)) return parseFloat(t[1]);
-    // Revolut: { price: "...", ... } object
     if (t.price) return parseFloat(t.price);
-    // Legacy: { p: "..." } object
     if (t.p) return parseFloat(t.p);
     return null;
   }).filter(p => p !== null);
