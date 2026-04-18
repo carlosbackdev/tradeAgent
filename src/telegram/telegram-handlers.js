@@ -57,6 +57,9 @@ export class TelegramHandlers {
                 [
                     { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
                     { text: '⚙️ API CONFIG', callback_data: '/configuration' },
+                ],
+                [
+                    { text: '💬 ASK AGENT', callback_data: '/ask' },
                     { text: '❓ HELP', callback_data: '/help' }
                 ]
             ]
@@ -93,12 +96,29 @@ export class TelegramHandlers {
                 [
                     { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
                     { text: '⚙️ API CONFIG', callback_data: '/configuration' },
+                ],
+                [
+                    { text: '💬 ASK AGENT', callback_data: '/ask' },
                     { text: '❓ HELP', callback_data: '/help' }
                 ]
             ]
         };
 
         await this.ctx.sendMessage('🤖 Acciones disponibles:', initKeyboard);
+    }
+
+    async handleAsk() {
+        const pairs = config.trading.pairs;
+        const inline_keyboard = chunk(
+            pairs.map(p => ({ text: `❓ ${p}`, callback_data: `ask_coin:${p}` })),
+            2
+        );
+        inline_keyboard.push([{ text: '🔙 ATRÁS', callback_data: '/init' }]);
+
+        await this.ctx.sendMessage(
+            '💬 *PREGUNTA AL AGENTE*\n\nSelecciona una moneda para analizar con tu pregunta:',
+            { parse_mode: 'Markdown', inline_keyboard }
+        );
     }
 
     async handleStart() {
@@ -316,67 +336,85 @@ Ejemplos válidos:
     }
 
     async handleConfigInput(text) {
-        if (!this.configState.isConfiguring) return;
+        if (this.configState.isConfiguring && this.configState.mode === 'asking') {
+            const question = text.trim();
+            const symbol = this.configState.symbol;
 
-        if (!this.configState.selectedKey) {
-            const keys = this.configState.mode === 'agent'
-                ? config.editableKeysAgent
-                : config.editableKeys;
+            this.configState.isConfiguring = false;
+            this.configState.mode = null;
+            this.configState.symbol = null;
 
-            const idx = parseInt(text.trim()) - 1;
-            if (isNaN(idx) || idx < 0 || idx >= keys.length) {
-                await this.ctx.sendMessage(`❌ Número inválido (1-${keys.length})`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
-                return;
+            await this.ctx.sendMessage(`⏳ Procesando pregunta para *${symbol}*...\n_"${question}"_`, { parse_mode: 'Markdown' });
+
+            try {
+                await runAgentCycle('manual', symbol, question);
+            } catch (err) {
+                await this.ctx.sendMessage(`❌ Error: ${err.message}`);
             }
-
-            const key = keys[idx];
-            this.configState.selectedKey = key;
-
-            // Interactive options for specific agent keys
-            if (key === 'VISION_AGENT') {
-                await this.ctx.sendMessage('🔭 Selecciona la VISIÓN del agente:', {
-                    inline_keyboard: [
-                        [
-                            { text: 'Short', callback_data: 'SET_AGENT_CFG:VISION_AGENT:short' },
-                            { text: 'Medium', callback_data: 'SET_AGENT_CFG:VISION_AGENT:medium' },
-                            { text: 'Long', callback_data: 'SET_AGENT_CFG:VISION_AGENT:long' }
-                        ],
-                        [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
-                    ]
-                });
-                return;
-            }
-
-            if (key === 'PERSONALITY_AGENT') {
-                await this.ctx.sendMessage('🧠 Selecciona la PERSONALIDAD del agente:', {
-                    inline_keyboard: [
-                        [
-                            { text: 'Conservative', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Conservative' },
-                            { text: 'Moderate', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Moderate' },
-                            { text: 'Aggressive', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Aggressive' }
-                        ],
-                        [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
-                    ]
-                });
-                return;
-            }
-
-            await this.ctx.sendMessage(`✏️ ${this.configState.selectedKey}\n\nEscribe el nuevo valor:`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
             return;
         }
 
-        const key = this.configState.selectedKey;
-        const value = text.trim();
-        const ok = this.ctx.updateEnvFile(key, value);
+        if (this.configState.isConfiguring) {
+            if (!this.configState.selectedKey) {
+                const keys = this.configState.mode === 'agent'
+                    ? config.editableKeysAgent
+                    : config.editableKeys;
 
-        await this.ctx.sendMessage(ok
-            ? `✅ ${key} actualizado.\n\nRegresa al menú con /init`
-            : `❌ Error guardando ${key}`,
-            { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
-        );
+                const idx = parseInt(text.trim()) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= keys.length) {
+                    await this.ctx.sendMessage(`❌ Número inválido (1-${keys.length})`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                    return;
+                }
 
-        this.configState.isConfiguring = false;
-        this.configState.selectedKey = null;
+                const key = keys[idx];
+                this.configState.selectedKey = key;
+
+                // Interactive options for specific agent keys
+                if (key === 'VISION_AGENT') {
+                    await this.ctx.sendMessage('🔭 Selecciona la VISIÓN del agente:', {
+                        inline_keyboard: [
+                            [
+                                { text: 'Short', callback_data: 'SET_AGENT_CFG:VISION_AGENT:short' },
+                                { text: 'Medium', callback_data: 'SET_AGENT_CFG:VISION_AGENT:medium' },
+                                { text: 'Long', callback_data: 'SET_AGENT_CFG:VISION_AGENT:long' }
+                            ],
+                            [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
+                        ]
+                    });
+                    return;
+                }
+
+                if (key === 'PERSONALITY_AGENT') {
+                    await this.ctx.sendMessage('🧠 Selecciona la PERSONALIDAD del agente:', {
+                        inline_keyboard: [
+                            [
+                                { text: 'Conservative', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Conservative' },
+                                { text: 'Moderate', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Moderate' },
+                                { text: 'Aggressive', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Aggressive' }
+                            ],
+                            [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
+                        ]
+                    });
+                    return;
+                }
+
+                await this.ctx.sendMessage(`✏️ ${this.configState.selectedKey}\n\nEscribe el nuevo valor:`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                return;
+            }
+
+            const key = this.configState.selectedKey;
+            const value = text.trim();
+            const ok = this.ctx.updateEnvFile(key, value);
+
+            await this.ctx.sendMessage(ok
+                ? `✅ ${key} actualizado.\n\nRegresa al menú con /init`
+                : `❌ Error guardando ${key}`,
+                { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
+            );
+
+            this.configState.isConfiguring = false;
+            this.configState.selectedKey = null;
+        }
     }
     async handleConfigurationAgent() {
         const keys = config.editableKeysAgent;
@@ -419,6 +457,7 @@ Ejemplos válidos:
             if (data === '/cron') return await this.handleCron();
             if (data === '/stats') return await this.handleTradingStats();
             if (data === '/agent') return await this.handleConfigurationAgent();
+            if (data === '/ask') return await this.handleAsk();
 
             const symbol = data.substring(1).toUpperCase();
             if (COINS.some(c => c.symbol === symbol)) {
@@ -469,6 +508,20 @@ Ejemplos válidos:
             );
             return;
         }
+
+        if (data.startsWith('ask_coin:')) {
+            const symbol = data.split(':')[1];
+            this.configState.isConfiguring = true;
+            this.configState.mode = 'asking';
+            this.configState.symbol = symbol;
+
+            await this.ctx.editMessage(messageId,
+                `💬 *PREGUNTA PARA ${symbol}*\n\nEscribe tu pregunta ahora. El agente analizará el mercado y responderá teniendo en cuenta tu consulta.`,
+                { parse_mode: 'Markdown', inline_keyboard: [[{ text: '🔙 CANCELAR', callback_data: '/ask' }]] }
+            );
+            return;
+        }
+
         if (data.startsWith('SET_AGENT_CFG:')) {
             const [, key, value] = data.split(':');
             const ok = this.ctx.updateEnvFile(key, value);

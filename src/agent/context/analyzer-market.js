@@ -4,7 +4,7 @@
 
 import { config } from '../../config/config.js';
 
-export function buildAnalyzerMessage(context) {
+export function buildAnalyzerMessage(context, question = '') {
 
   const usableBalances = JSON.parse(JSON.stringify(context.balances || {}));
 
@@ -38,6 +38,10 @@ export function buildAnalyzerMessage(context) {
       STOP_LOSS_PCT: config.trading.stopLossPct,
     },
   };
+
+  if (question != '') {
+    analysisData.question = 'User extra question: ' + question;
+  }
 
   return JSON.stringify(analysisData, null, 2);
 }

@@ -28,7 +28,7 @@ import {
 import { callAgentAnalyzer } from './services/clientAgent.js';
 import { config } from '../config/config.js';
 
-export async function runAgentCycle(triggerReason = 'cron', coin) {
+export async function runAgentCycle(triggerReason = 'cron', coin, question = '') {
   const startTime = Date.now();
   logger.info(`🤖 Agent cycle started (trigger: ${triggerReason}, coin: ${coin})`);
 
@@ -247,7 +247,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin) {
       logger.info(`⚡ Bypassing Claude. Forced decision: ${forcedDecision.reasoning}`);
     } else {
       try {
-        decision = await callAgentAnalyzer(analyzerContext);
+        decision = await callAgentAnalyzer(analyzerContext, question);
 
         logger.info('✅ Claude decision received');
 

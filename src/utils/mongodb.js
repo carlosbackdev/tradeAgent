@@ -129,33 +129,39 @@ export async function saveOrder({
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
 
+  const safeParse = (val) => {
+    const p = parseFloat(val);
+    return isNaN(p) ? null : p;
+  };
+
   const doc = {
     created_at: new Date(),
     decision_id: decisionId,
     symbol,
     side,
     order_type: orderType,
-    qty: parseFloat(qty),
-    price: price ? parseFloat(price) : null,
-    usd_amount: parseFloat(usdAmount),
+    qty: safeParse(qty),
+    price: safeParse(price),
+    usd_amount: safeParse(usdAmount),
     revolut_order_id: revolutOrderId,
-    take_profit: takeProfit ? parseFloat(takeProfit) : null,
-    stop_loss: stopLoss ? parseFloat(stopLoss) : null,
-    risk_reward_ratio: riskRewardRatio ? parseFloat(riskRewardRatio) : null,
+    take_profit: safeParse(takeProfit),
+    stop_loss: safeParse(stopLoss),
+    risk_reward_ratio: safeParse(riskRewardRatio),
     status,
     error: error || null,
-    rendimiento: rendimiento !== undefined ? parseFloat(rendimiento) : null,
+    rendimiento: rendimiento !== undefined ? safeParse(rendimiento) : null,
   };
 
   try {
     const result = await ordersCollection.insertOne(doc);
-    logger.debug(`💼 Order saved with TP: ${takeProfit}, SL: ${stopLoss} (ID: ${result.insertedId})`);
+    logger.info(`✅ Order SAVED to MongoDB: ${side.toUpperCase()} ${symbol} ($${doc.usd_amount}) | ID: ${result.insertedId}`);
     return { ...doc, _id: result.insertedId };
   } catch (err) {
-    logger.error('Failed to save order', err.message);
+    logger.error('❌ Failed to save order to MongoDB', err.message);
     throw err;
   }
 }
+
 
 /**
  * Save portfolio snapshot
