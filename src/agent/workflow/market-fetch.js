@@ -1,0 +1,47 @@
+/**
+ * workflow/market-fetch.js
+ * Initializes clients and fetches market data (balances, orders, snapshot)
+ */
+
+import { RevolutClient } from '../../revolut/client.js';
+import { MarketData } from '../../revolut/market.js';
+import { logger } from '../../utils/logger.js';
+
+export async function fetchMarketData(coin, config) {
+  if (!coin) throw new Error('No trading pair passed to fetchMarketData');
+
+  logger.info(`📊 Fetching data for: ${coin}`);
+
+  const client = new RevolutClient();
+  const market = new MarketData(client);
+
+  const [balances, openOrders, snapshot] = await Promise.all([
+    market.getBalances(),
+    market.getOpenOrders([coin]),
+    market.getSnapshot(coin),
+  ]).catch(err => {
+    throw new Error(`Failed to fetch market data: ${err.message}`);
+  });
+
+  const balanceArray = Array.isArray(balances) ? balances : (balances?.data || []);
+  const eurBalance = parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
+  const usdBalance = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
+  const totalFiat = eurBalance + usdBalance;
+
+  if (totalFiat < config.trading.minOrderUsd) {
+    const { notify } = await import('../../telegram/handles.js');
+    await notify(`⚠️ Fondos en USD/EUR insuficientes ($${totalFiat.toFixed(2)}) para abrir nuevas posiciones (mínimo $${config.trading.minOrderUsd}). El agente seguirá monitorizando y cerrando ventas si es necesario.`).catch(() => { });
+  }
+
+  return {
+    client,
+    market,
+    balances,
+    balanceArray,
+    openOrders,
+    snapshot,
+    eurBalance,
+    usdBalance,
+    totalFiat,
+  };
+}

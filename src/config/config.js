@@ -22,12 +22,14 @@ class Config {
       botToken: process.env.TELEGRAM_BOT_TOKEN,
       chatId: process.env.TELEGRAM_CHAT_ID,
     };
+    const parseNum = (val) => parseFloat(String(val).replace(',', '.'));
+
     this.trading = {
       pairs: (process.env.TRADING_PAIRS || '').split(',').map(p => p.trim().replace('/', '-')).filter(Boolean),
-      maxTradeSize: parseFloat(process.env.MAX_TRADE_SIZE || '0.10'),
-      minOrderUsd: parseFloat(process.env.MIN_ORDER || '50'),
-      takeProfitPct: parseFloat(process.env.TAKE_PROFIT_PCT || '0'),
-      stopLossPct: parseFloat(process.env.STOP_LOSS_PCT || '0'),
+      maxTradeSize: parseNum(process.env.MAX_TRADE_SIZE || '0.10'),
+      minOrderUsd: parseNum(process.env.MIN_ORDER || '50'),
+      takeProfitPct: parseNum(process.env.TAKE_PROFIT_PCT || '0'),
+      stopLossPct: parseNum(process.env.STOP_LOSS_PCT || '0'),
       visionAgent: process.env.VISION_AGENT || 'short',
       personalityAgent: process.env.PERSONALITY_AGENT || 'moderate',
     };

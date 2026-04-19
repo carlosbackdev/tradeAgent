@@ -3,8 +3,7 @@
  * Telegram bot with long-polling.
  *
  */
-import fs from 'fs';
-import path from 'path';
+
 import cron from 'node-cron';
 import { runAgentCycle } from './agent/executor.js';
 import { logger } from './utils/logger.js';
@@ -98,6 +97,7 @@ function startCron(schedule) {
         logger.info(`🔄 Processing coin: ${coin}`);
         await runAgentCycle('cron', coin);
       }
+      await handlers.handleMenu();
     } catch (err) {
       logger.error('Cron cycle failed:', err.message);
     }

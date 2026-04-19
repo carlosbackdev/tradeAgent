@@ -19,7 +19,7 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
       msg += `  • Action: ${result.action.toUpperCase()}\n`;
       msg += `  • Confidence: ${result.confidence}%\n`;
       msg += `  • Amount: $${result.usdAmount}\n`;
-      if (result.rendimiento !== undefined) {
+      if (result.rendimiento != null) {
         const sign = result.rendimiento >= 0 ? '+' : '';
         msg += `  📈 Rendimiento: ${sign}${result.rendimiento.toFixed(2)}%\n`;
       }
