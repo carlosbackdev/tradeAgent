@@ -3,7 +3,7 @@
  * agent/context/prompt.js
  * System prompt and Anthropic client for the analyzer.
 */
-import { getSystemPrompt } from '../context/prompt.js';
+import { getSystemPrompt } from '../context/prompts/trading-system-prompt.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildAnalyzerMessage } from '../context/analyzer-market.js';
 import { logger } from '../../utils/logger.js';
@@ -11,21 +11,12 @@ import { config } from '../../config/config.js';
 
 export const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
-export async function callAgentAnalyzer(context, question) {
-  let userMessage = buildAnalyzerMessage(context, question);
-
-  const response = await client.messages.create({
-    model: config.anthropic.model,
-    max_tokens: 2048,
-    system: getSystemPrompt(config.trading),
-    messages: [{ role: 'user', content: [{ type: 'text', text: userMessage }] }],
-  });
-
-  const raw = response.content
-    .map(block => block.text || '')
-    .join('')
-    .trim();
-
+/**
+ * Parse Claude's JSON response robustly
+ * @param {string} raw - Raw response text from Claude
+ * @returns {Object} Parsed JSON object
+ */
+export function parseClaudeJsonResponse(raw) {
   try {
     // Try parsing directly first
     return JSON.parse(raw);
@@ -50,5 +41,34 @@ export async function callAgentAnalyzer(context, question) {
       throw new Error(`Claude JSON parse failed: ${parseErr.message}`);
     }
   }
+}
+
+/**
+ * Call Claude with custom message and system prompt
+ * @param {string} userMessage - User message content
+ * @param {string} systemPrompt - System prompt (if different from default)
+ * @returns {Object} Parsed JSON response from Claude
+ */
+export async function callClaudeWithCustomPrompt(userMessage, systemPrompt = null) {
+  const effectiveSystemPrompt = systemPrompt || getSystemPrompt(config.trading);
+
+  const response = await client.messages.create({
+    model: config.anthropic.model,
+    max_tokens: 2048,
+    system: effectiveSystemPrompt,
+    messages: [{ role: 'user', content: [{ type: 'text', text: userMessage }] }],
+  });
+
+  const raw = response.content
+    .map(block => block.text || '')
+    .join('')
+    .trim();
+
+  return parseClaudeJsonResponse(raw);
+}
+
+export async function callAgentAnalyzer(context, question) {
+  let userMessage = buildAnalyzerMessage(context, question);
+  return callClaudeWithCustomPrompt(userMessage);
 }
 

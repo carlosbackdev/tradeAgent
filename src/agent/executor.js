@@ -24,6 +24,7 @@ import { fetchMarketData } from './workflow/market-fetch.js';
 import { checkForcedDecisions } from './workflow/decision-engine.js';
 import { buildAnalyzerContext } from './workflow/context-builder.js';
 import { executeDecisions } from './workflow/order-executor.js';
+import { processOpenOrders } from './workflow/open-orders-manager.js';
 
 export async function runAgentCycle(triggerReason = 'cron', coin, question = '') {
   const startTime = Date.now();
@@ -44,7 +45,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     // ── 1. Fetch market data ───────────────────────────────────────
     const { client, market, balances, balanceArray, openOrders, snapshot } = await fetchMarketData(coin, config);
 
-    // ── 2. Compute indicators ──────────────────────────────────────
+    // ── 2. Compute indicators (EARLY - needed for open order analysis) ──
     const indicators = {};
     const snapshots = [snapshot];
 
@@ -69,7 +70,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       throw new Error('No valid indicators computed — not enough historical data');
     }
 
-    // ── 3. Check SL/TP and fetch last order ────────────────────────
+    // ── 3. Check SL/TP and fetch last order (EARLY) ──────────────────
     let lastOrder = null;
     let rendimiento = null;
 
@@ -111,7 +112,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     );
     rendimiento = calculatedRendimiento;
 
-    // ── 4. Build context for Claude ────────────────────────────────
+    // ── 4. Build context for Claude (EARLY - needed for open order analysis) ──
     const previousDecisionsBySymbol = {};
     if (dbConnected) {
       for (const snap of snapshots) {
@@ -143,6 +144,63 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     analyzerContext.previousDecisions = previousDecisionsBySymbol;
     analyzerContext.lastExecutedOrder = lastOrder;
     analyzerContext.rendimiento = rendimiento;
+    analyzerContext.lastPrice = client.lastPrice || 0;
+
+    // ── 4.2 Check for open orders (with FULL context) ────────────────
+    // openOrders already fetched from fetchMarketData
+    const coinBalance = balances?.[coin]?.available || 0;
+    
+    // Ensure openOrders is an array
+    const ordersArray = Array.isArray(openOrders) ? openOrders : [];
+    if (!Array.isArray(openOrders)) {
+      logger.warn(`⚠️ openOrders is not an array: ${typeof openOrders}. Treating as empty.`);
+    }
+    
+    // Filter open orders: THIS coin vs OTHER coins
+    const openOrdersThisCoin = ordersArray.filter(order => {
+      const orderSymbol = (order.symbol || '').replace('/', '-').toUpperCase();
+      const normalizedCoin = coin.replace('/', '-').toUpperCase();
+      return orderSymbol === normalizedCoin;
+    });
+
+    const openOrdersOtherCoins = ordersArray.filter(order => {
+      const orderSymbol = (order.symbol || '').replace('/', '-').toUpperCase();
+      const normalizedCoin = coin.replace('/', '-').toUpperCase();
+      return orderSymbol !== normalizedCoin;
+    });
+
+    logger.info(`🔍 Open orders: ${openOrdersThisCoin.length} for ${coin}, ${openOrdersOtherCoins.length} for other coins`);
+
+    // Handle open orders ONLY if they exist
+    if (openOrdersThisCoin.length > 0 || openOrdersOtherCoins.length > 0) {
+      
+      // Case 1: balance=0 + ONLY orders for OTHER coins → RETORNA sin procesar
+      if (coinBalance === 0 && openOrdersOtherCoins.length > 0 && openOrdersThisCoin.length === 0) {
+        logger.warn(`⚠️  Balance 0 for ${coin}. ${openOrdersOtherCoins.length} open order(s) for other coins blocking.`);
+        const otherCoinsList = [...new Set(openOrdersOtherCoins.map(o => o.symbol || 'unknown'))].join(', ');
+        await notify(`⚠️  *${coin}*: Balance 0. Open orders blocking for: ${otherCoinsList}. Pausing.`).catch(() => {});
+        return {
+          decision: null,
+          execResults: [],
+          stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'zero_balance_other_orders' }
+        };
+      }
+      
+      // Case 2: Orders for THIS coin (ANY balance) → Procesa with FULL context y RETORNA
+      if (openOrdersThisCoin.length > 0) {
+        logger.info(`📋 Processing ${openOrdersThisCoin.length} open order(s) for ${coin} with full context...`);
+        const processResult = await processOpenOrders(coin, openOrdersThisCoin, analyzerContext, client, market, dbConnected, triggerReason);
+        
+        logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
+        await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`).catch(() => {});
+        return {
+          decision: null,
+          execResults: [],
+          stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'open_orders_processed' }
+        };
+      }
+    }
+    // If NO open orders → continue normally (skip this section)
 
     logger.info('Analyzer context:', JSON.stringify(analyzerContext, null, 2));
     logger.info('Forced decision:', JSON.stringify(forcedDecision, null, 2));
@@ -227,7 +285,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     return { decision, execResults, stats: { executedCount, skippedCount, errorCount } };
 
   } catch (err) {
-    const msg = `❌ Agent cycle failed: ${err.message}`;
+    const msg = `❌ Agent cycle failed: ${err.message || err}`;
     logger.error(msg);
     await notifyError(msg).catch(() => { });
     throw err;
