@@ -106,8 +106,8 @@ export class MarketData {
 
     const res = await this.client.get(`/candles/${dashed}`, {
       interval,
-      from,
-      to,
+      since: from,
+      until: to,
     });
 
     const candles = Array.isArray(res?.data) ? res.data : [];
