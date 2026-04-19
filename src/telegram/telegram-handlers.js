@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 import { CronParse } from '../utils/formatter.js';
 import { getTradingStats, getTradingPerformance } from '../utils/mongodb.js';
 import { config } from '../config/config.js';
+import { CRON_PRESETS } from './entities/cronPresets.js';
 
 const COINS = [
     { symbol: 'BTC', name: 'Bitcoin', emoji: '₿' },
@@ -15,13 +16,7 @@ const COINS = [
 
 
 // ── Cron presets ──────────────────────────────────────────────────
-const CRON_PRESETS = [
-    { label: '5 min', expr: '*/5 * * * *' },
-    { label: '15 min', expr: '*/15 * * * *' },
-    { label: '30 min', expr: '*/30 * * * *' },
-    { label: '1 hora', expr: '0 * * * *' },
-    { label: '4 horas', expr: '0 */4 * * *' },
-];
+// Imported from entities/cronPresets.js
 
 function chunk(arr, size) {
     const out = [];

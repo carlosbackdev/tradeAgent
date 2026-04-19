@@ -28,8 +28,14 @@ export class TelegramCommands {
             case '/cron_off': await this.handlers.handleCron('off'); break;
             case '/cron_5m': await this.handlers.handleCron('*/5 * * * *'); break;
             case '/cron_15m': await this.handlers.handleCron('*/15 * * * *'); break;
+            case '/cron_30m': await this.handlers.handleCron('*/30 * * * *'); break;
             case '/cron_1h': await this.handlers.handleCron('0 * * * *'); break;
+            case '/cron_2h': await this.handlers.handleCron('0 */2 * * *'); break;
+            case '/cron_3h': await this.handlers.handleCron('0 */3 * * *'); break;
             case '/cron_4h': await this.handlers.handleCron('0 */4 * * *'); break;
+            case '/cron_8h': await this.handlers.handleCron('0 */8 * * *'); break;
+            case '/cron_12h': await this.handlers.handleCron('0 */12 * * *'); break;
+            case '/cron_1d': await this.handlers.handleCron('0 0 * * *'); break;
             case '/btc': await this.handlers.handleCoinCommand('BTC'); break;
             case '/eth': await this.handlers.handleCoinCommand('ETH'); break;
             case '/sol': await this.handlers.handleCoinCommand('SOL'); break;

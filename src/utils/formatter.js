@@ -43,5 +43,10 @@ export function CronParse(expr) {
   if (expr === '*/15 * * * *') return 'cada 15 minutos (predeterminado)';
   if (expr === '*/30 * * * *') return 'cada 30 minutos';
   if (expr === '0 * * * *') return 'cada hora';
+  if (expr === '0 */2 * * *') return 'cada 2 horas';
+  if (expr === '0 */3 * * *') return 'cada 3 horas';
   if (expr === '0 */4 * * *') return 'cada 4 horas';
+  if (expr === '0 */8 * * *') return 'cada 8 horas';
+  if (expr === '0 */12 * * *') return 'cada 12 horas';
+  if (expr === '0 0 * * *') return 'cada día (00:00)';
 }
