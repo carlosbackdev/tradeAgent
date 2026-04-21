@@ -84,7 +84,12 @@ export async function inviteUser({ telegramUsername, invitedBy }) {
 
 export async function findUserByTelegramId(telegramId) {
   const db = await getDb();
-  return db.collection('users').findOne({ telegram_id: String(telegramId) });
+  const idStr = String(telegramId);
+  const user = await db.collection('users').findOne({ telegram_id: idStr });
+  if (user) {
+    // logger.debug(`User found by ID ${idStr}: @${user.telegram_username}`);
+  }
+  return user;
 }
 
 export async function findUserByUsername(username) {
@@ -98,30 +103,46 @@ export async function claimInvite(telegramId, telegramUsername) {
   const col = db.collection('users');
 
   const username = (telegramUsername || '').replace('@', '').toLowerCase();
+  const idStr = String(telegramId);
 
-  // Check by telegram_id first (returning user)
-  let user = await col.findOne({ telegram_id: String(telegramId) });
-  if (user) return user;
+  // 1. Check if this telegramId is ALREADY linked to a user
+  let user = await col.findOne({ telegram_id: idStr });
+  if (user) {
+    logger.info(`User ${idStr} already claimed as @${user.telegram_username} (status: ${user.status})`);
+    return user;
+  }
 
-  // Match pending invite by username
+  // 2. Fallback: Match pending invite by username
   if (username) {
-    user = await col.findOne({ telegram_username: username, status: 'pending_invite' });
+    // We look for ANY user with this username. 
+    // If they are 'pending_invite' or 'pending_setup', we link them.
+    user = await col.findOne({ telegram_username: username });
+    
     if (user) {
-      await col.updateOne(
-        { _id: user._id },
-        {
-          $set: {
-            telegram_id: String(telegramId),
-            status: 'pending_setup',
-            claimed_at: new Date(),
-            updated_at: new Date(),
+      if (user.status === 'suspended') {
+        logger.warn(`Attempt to claim invite by suspended user @${username}`);
+        return user; 
+      }
+
+      if (!user.telegram_id || user.status === 'pending_invite') {
+        logger.info(`Linking new telegram_id ${idStr} to invited user @${username}`);
+        await col.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              telegram_id: idStr,
+              status: 'pending_setup',
+              claimed_at: new Date(),
+              updated_at: new Date(),
+            }
           }
-        }
-      );
-      return { ...user, telegram_id: String(telegramId), status: 'pending_setup' };
+        );
+        return { ...user, telegram_id: idStr, status: 'pending_setup' };
+      }
     }
   }
 
+  logger.warn(`No pending invite found for @${username} (ID: ${idStr})`);
   return null; // Not invited
 }
 
@@ -130,27 +151,49 @@ export async function claimInviteByCode(telegramId, inviteCode, telegramUsername
   const col = db.collection('users');
 
   const normalizedCode = (inviteCode || '').trim();
+  const idStr = String(telegramId);
   if (!normalizedCode) return null;
 
-  const user = await col.findOne({ invite_code: normalizedCode, status: 'pending_invite' });
-  if (!user) return null;
+  // Find user by code regardless of status (unless they are already active/suspended by another ID)
+  const user = await col.findOne({ invite_code: normalizedCode });
+  if (!user) {
+    logger.warn(`Invite code ${normalizedCode} not found in database`);
+    return null;
+  }
+
+  // If already restricted
+  if (user.status === 'suspended') {
+    logger.warn(`Attempt to use invite code ${normalizedCode} by suspended user`);
+    return user;
+  }
+
+  // If already claimed by ANOTHER ID
+  if (user.telegram_id && user.telegram_id !== idStr) {
+    logger.warn(`Invite code ${normalizedCode} already claimed by different ID: ${user.telegram_id}`);
+    return null; 
+  }
 
   const normalizedUsername = (telegramUsername || user.telegram_username || '').replace('@', '').toLowerCase();
 
-  await col.updateOne(
-    { _id: user._id },
-    {
-      $set: {
-        telegram_id: String(telegramId),
-        telegram_username: normalizedUsername,
-        status: 'pending_setup',
-        claimed_at: new Date(),
-        updated_at: new Date(),
+  // Update only if not already fully set up
+  if (!user.telegram_id || user.status === 'pending_invite') {
+    logger.info(`Claiming invite code ${normalizedCode} for ID ${idStr} (@${normalizedUsername})`);
+    await col.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          telegram_id: idStr,
+          telegram_username: normalizedUsername,
+          status: 'pending_setup',
+          claimed_at: new Date(),
+          updated_at: new Date(),
+        }
       }
-    }
-  );
+    );
+    return { ...user, telegram_id: idStr, telegram_username: normalizedUsername, status: 'pending_setup' };
+  }
 
-  return { ...user, telegram_id: String(telegramId), telegram_username: normalizedUsername, status: 'pending_setup' };
+  return user;
 }
 
 export async function updateUserConfig(telegramId, configPatch) {

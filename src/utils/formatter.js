@@ -3,6 +3,8 @@
  * Format decision results and execution info for Telegram notifications.
  */
 
+const TOTAL_STEPS = 4;
+
 export function formatDecision({ decision, execResults, elapsed, triggerReason }) {
   let msg = `📊 Trading Agent Cycle\n`;
   msg += `⏱️ Elapsed: ${elapsed}s | 🎯 Trigger: ${triggerReason}\n\n`;
@@ -44,6 +46,25 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
 
   return msg;
 }
+
+export function getWelcomeMessage(username) {
+  const display = username ? ' @' + escapeHTML(username) : '';
+  return `👋 ¡Hola${display}!\n\nHas sido invitado al sistema de trading autónomo.\n\nAntes de empezar, necesito configurar tu cuenta en ${TOTAL_STEPS} pasos rápidos.\n\nPulsa el botón para comenzar:`;
+}
+
+export function buildOnboardingStatus(user) {
+  const stepNum = user.onboarding_step || 1;
+  return `🔧 Configuración en curso: Paso ${stepNum} de ${TOTAL_STEPS}`;
+}
+
+export function buildProgressBar(current, total) {
+  const size = 10;
+  const progress = Math.min(Math.max(current, 0), total);
+  const filled = Math.round((progress / total) * size);
+  const empty = size - filled;
+  return '🟦'.repeat(filled) + '⬜'.repeat(empty) + ` (${current}/${total})`;
+}
+
 export function CronParse(expr) {
   if (expr === '*/5 * * * *') return 'cada 5 minutos';
   if (expr === '*/15 * * * *') return 'cada 15 minutos (predeterminado)';
@@ -55,4 +76,14 @@ export function CronParse(expr) {
   if (expr === '0 */8 * * *') return 'cada 8 horas';
   if (expr === '0 */12 * * *') return 'cada 12 horas';
   if (expr === '0 0 * * *') return 'cada día (00:00)';
+}
+
+export function escapeHTML(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

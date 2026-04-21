@@ -46,6 +46,7 @@ const BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // Active user sessions: Map<telegramId, UserSession>
 const sessions = new Map();
+let botUser = null; 
 
 // ─────────────────────────────────────────────────────────────────
 // Telegram API helpers
@@ -110,12 +111,12 @@ async function handleAdminCommand(chatId, text) {
     }
     const result = await inviteUser({ telegramUsername: username, invitedBy: String(chatId) });
     if (result.ok) {
-        if (!BOT_USERNAME) {
-          await sendMessage(chatId, `✅ @${result.username} ha sido invitado. Configura TELEGRAM_BOT_USERNAME para generar el enlace de invitación.`);
+        if (!botUser?.username) {
+          await sendMessage(chatId, `✅ @${result.username} ha sido invitado. Cargando nombre del bot...`);
           return;
         }
 
-        const inviteLink = `https://t.me/${BOT_USERNAME}?start=invite_${result.inviteCode}`;
+        const inviteLink = `https://t.me/${botUser.username}?start=invite_${result.inviteCode}`;
         await sendMessage(
           chatId,
           `✅ @${result.username} ha sido invitado.\n\n` +
@@ -268,6 +269,10 @@ async function routeUpdate(update) {
 
   if (!fromId) return;
 
+  if (startMatch) {
+    logger.info(`Received /start from ${fromUsername || fromId}${startPayload ? ' with payload: ' + startPayload : ''}`);
+  }
+
   // ── Identify user ────────────────────────────────────────────────
   let user = await findUserByTelegramId(chatId);
 
@@ -281,12 +286,18 @@ async function routeUpdate(update) {
   // Try to claim a pending invite by code (deep link)
   if (!user && startPayload?.startsWith('invite_')) {
     const inviteCode = startPayload.replace('invite_', '').trim();
+    logger.info(`Attempting to claim invite by code: ${inviteCode} for ${fromId} (@${fromUsername || '?'})`);
     user = await claimInviteByCode(chatId, inviteCode, fromUsername);
+    if (user) logger.info(`✅ Invite code claimed successfully for ${user.telegram_username}`);
   }
 
   // Try to claim a pending invite by username (fallback)
   if (!user || user.status === 'pending_invite') {
-    user = await claimInvite(chatId, fromUsername);
+    if (fromUsername) {
+       logger.info(`Attempting to claim invite by username: ${fromUsername} for ${fromId}`);
+       user = await claimInvite(chatId, fromUsername);
+       if (user) logger.info(`✅ Invite username claimed successfully for ${user.telegram_username}`);
+    }
   }
 
   // Not invited at all
@@ -309,6 +320,7 @@ async function routeUpdate(update) {
   // ── Pending setup — route to onboarding ─────────────────────────
   if (user.status === 'pending_setup' || user.status === 'pending_invite') {
     if (startMatch) {
+      logger.info(`Sending welcome message to user ${chatId} (@${fromUsername || '?'})`);
       await sendMessage(chatId, getWelcomeMessage(fromUsername), {
         reply_markup: {
           inline_keyboard: [[{ text: '▶️ Comenzar configuración', callback_data: 'onboarding_start' }]]
@@ -441,6 +453,15 @@ export async function startMultiUserBot() {
 
   logger.info('🤖 Multi-user Telegram bot starting...');
   logger.info(`👤 Admin ID: ${ADMIN_ID || '(not set)'}`);
+
+  // Auto-detect bot identity
+  try {
+    const me = await telegramRequest('getMe', {});
+    botUser = me.result;
+    logger.info(`🤖 Bot identity: @${botUser.username} (${botUser.first_name})`);
+  } catch (err) {
+    logger.warn(`⚠️ Could not fetch bot identity: ${err.message}`);
+  }
 
   // Re-activate sessions for all active users on startup
   const { listUsers } = await import('./users/user-registry.js');

@@ -5,6 +5,7 @@
 
 import { updateUserConfig, setOnboardingStep, setUserStatus } from './user-registry.js';
 import { logger } from '../utils/logger.js';
+import { escapeHTML } from '../utils/formatter.js';
 
 export const TOTAL_STEPS = 4;
 
@@ -93,7 +94,8 @@ export async function processOnboardingStep(user, text) {
 }
 
 export function getWelcomeMessage(username) {
-  return `👋 ¡Hola${username ? ' @' + username : ''}!\n\nHas sido invitado al sistema de trading autónomo.\n\nAntes de empezar, necesito configurar tu cuenta en ${TOTAL_STEPS} pasos rápidos.\n\nPulsa el botón para comenzar:`;
+  const display = username ? ' @' + escapeHTML(username) : '';
+  return `👋 ¡Hola${display}!\n\nHas sido invitado al sistema de trading autónomo.\n\nAntes de empezar, necesito configurar tu cuenta en ${TOTAL_STEPS} pasos rápidos.\n\nPulsa el botón para comenzar:`;
 }
 
 export function buildOnboardingStatus(user) {
@@ -101,6 +103,11 @@ export function buildOnboardingStatus(user) {
   return `🔧 Configuración en curso: Paso ${stepNum} de ${TOTAL_STEPS}`;
 }
 
-export function buildProgressBar() {
-  return '';
+export function buildProgressBar(current, total) {
+  const size = 10;
+  const progress = Math.min(Math.max(current, 0), total);
+  const filled = Math.round((progress / total) * size);
+  const empty = size - filled;
+  return '🟦'.repeat(filled) + '⬜'.repeat(empty) + ` (${current}/${total})`;
 }
+
