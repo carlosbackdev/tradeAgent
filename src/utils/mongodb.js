@@ -314,7 +314,7 @@ export async function getTradingStats(chatId = null) {
  * Also includes decision/order counts from getTradingStats.
  * @returns {Object|null}
  */
-export async function getTradingPerformance(chatId = null) {
+export async function getTradingPerformance(chatId = null, realBalances = null) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
   const decisionsCollection = db.collection('decisions');
@@ -408,6 +408,37 @@ export async function getTradingPerformance(chatId = null) {
     const totalOrders = totalBuys + totalSells;
     const closedTrades = winningTrades + losingTrades;
 
+    const manualPositions = [];
+
+    // Option B + Visibility: Cap MongoDB positions at physical balances, and expose un-managed balances to UI
+    if (realBalances) {
+      const balanceArray = Array.isArray(realBalances) ? realBalances : (realBalances.data || []);
+      
+      // 1. Check all physical crypto assets
+      for (const realBal of balanceArray) {
+        if (['USD', 'EUR', 'GBP'].includes(realBal.currency)) continue;
+        
+        const realQty = Number(realBal.total || 0);
+        if (realQty <= 0) continue;
+
+        const trackedPosKey = Object.keys(positions).find(k => k.startsWith(realBal.currency + '-'));
+        const botQty = trackedPosKey && positions[trackedPosKey] ? positions[trackedPosKey].qty : 0;
+
+        if (botQty > realQty) {
+          // Sync: Bot thinks we have more than we physically do (e.g. manual sell outside app)
+          const factor = realQty > 0 ? (realQty / botQty) : 0;
+          positions[trackedPosKey].qty = realQty;
+          positions[trackedPosKey].totalCost *= factor;
+        } else if (realQty > botQty) {
+          // UI: We have physical balance the bot didn't buy (manual deposit / legacy)
+          manualPositions.push({
+            symbol: realBal.currency + '-USD', // Assume USD quote for simplicity
+            qty: Number((realQty - botQty).toFixed(8))
+          });
+        }
+      }
+    }
+
     return {
       // ── Order / decision counts ──
       totalDecisions,
@@ -430,7 +461,7 @@ export async function getTradingPerformance(chatId = null) {
       winRate: closedTrades > 0
         ? ((winningTrades / closedTrades) * 100).toFixed(1) + '%'
         : '0%',
-      // ── Open positions still holding inventory (skip dust < $1) ──
+      // ── Positions ──
       openPositions: Object.entries(positions)
         .filter(([, p]) => p.qty > 0 && p.totalCost >= 1)
         .map(([symbol, p]) => ({
@@ -439,6 +470,7 @@ export async function getTradingPerformance(chatId = null) {
           avgPrice: Number(p.avgPrice.toFixed(8)),
           totalCost: Number(p.totalCost.toFixed(2))
         })),
+      manualPositions, // Explicitly separate manual holdings
       // ── Accumulated rendimiento from stored sell orders (sum, can be negative) ──
       // This is the simple sum of each trade's realized % stored at execution time.
       accumulatedRendimiento,

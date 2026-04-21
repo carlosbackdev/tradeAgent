@@ -24,7 +24,7 @@ function getAvailableCoin(balanceArray, symbol) {
   return parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
 }
 
-export async function executeDecisions(decisions, coin, balanceArray, indicators, lastOrder, config, rendimiento = null, dbConnected = false, chatId = null) {
+export async function executeDecisions(decisions, coin, balanceArray, indicators, lastOrder, config, rendimiento = null, dbConnected = false, chatId = null, managedPositions = []) {
   const execResults = [];
   let executedCount = 0, skippedCount = 0, errorCount = 0;
 
@@ -65,8 +65,12 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
 
       if (d.action === 'SELL') {
         const normalizedSymbol = d.symbol.replace('/', '-');
+        const baseCurrency = normalizedSymbol.split('-')[0];
         const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-        const coinBalance = getAvailableCoin(balanceArray, d.symbol);
+        
+        // Option B: Sell ONLY based on bot-managed positions
+        const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
+        const coinManagedBalance = managedPos ? managedPos.qty : 0;
 
         if (currentPrice <= 0) {
           execResults.push({ ...d, rendimiento, status: 'error', error: `No current price for ${d.symbol}` });
@@ -75,9 +79,9 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
           continue;
         }
 
-        const qtyToSell = coinBalance * positionPct;
+        const qtyToSell = coinManagedBalance * positionPct;
         usd = qtyToSell * currentPrice;
-        logger.info(`📐 SELL positionPct=${(positionPct * 100).toFixed(0)}% of ${coinBalance.toFixed(6)} ${d.symbol.split('-')[0]} → $${usd.toFixed(2)}`);
+        logger.info(`📐 SELL positionPct=${(positionPct * 100).toFixed(0)}% of managed ${coinManagedBalance.toFixed(6)} ${baseCurrency} → $${usd.toFixed(2)}`);
       }
     } else {
       // ── Legacy usdAmount mode (backward compat) ────────────
@@ -87,11 +91,12 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
       // Legacy SELL auto-fill if amount is missing
       if (d.action === 'SELL' && (isNaN(usd) || usd === 0)) {
         const baseCurrency = d.symbol.split('-')[0];
-        const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
+        const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
+        const coinManagedBalance = managedPos ? managedPos.qty : 0;
         const normalizedSymbol = d.symbol.replace('/', '-');
         const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-        usd = parseFloat((baseBalance * currentPrice).toFixed(2));
-        logger.info(`💱 SELL auto-fill (legacy): ${baseBalance} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`);
+        usd = parseFloat((coinManagedBalance * currentPrice).toFixed(2));
+        logger.info(`💱 SELL auto-fill (legacy managed): ${coinManagedBalance} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`);
       }
     }
 

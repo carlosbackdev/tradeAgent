@@ -3,6 +3,8 @@ import { runAgentCycle } from '../agent/executor.js';
 import { logger } from '../utils/logger.js';
 import { CronParse, formatInitMessage, formatStartMessage, formatStatsMessage, formatAskMessage, formatConfigMessage, formatPromptMessage, formatHelpMessage, formatAgentStatusMessage } from '../utils/formatter.js';
 import { getTradingStats, getTradingPerformance } from '../utils/mongodb.js';
+import { RevolutClient } from '../revolut/client.js';
+import { MarketData } from '../revolut/market.js';
 import { config } from '../config/config.js';
 import { CRON_PRESETS } from './entities/cronPresets.js';
 
@@ -180,7 +182,18 @@ export class TelegramHandlers {
     }
 
     async handleTradingStats() {
-        const stats = await getTradingPerformance(this.ctx.chatId);
+        // Fetch physical balances to cap MongoDB bot-managed holdings (Option B)
+        const uConfig = this.ctx.readEnvFile();
+        let balances = null;
+        try {
+            const client = new RevolutClient(uConfig);
+            const market = new MarketData(client);
+            balances = await market.getBalances();
+        } catch (err) {
+            logger.warn(`Failed to fetch balances for stats syncing: ${err.message}`);
+        }
+
+        const stats = await getTradingPerformance(this.ctx.chatId, balances);
 
         if (!stats) {
             await this.ctx.sendMessage(
@@ -217,7 +230,8 @@ export class TelegramHandlers {
             },
             performance: perf,
             invested: stats.totalInvested,
-            openPositions
+            openPositions,
+            manualPositions: stats.manualPositions || []
         });
 
         await this.ctx.sendMessage(msg, {

@@ -7,8 +7,12 @@ import { getTradingPerformance } from '../../utils/mongodb.js';
 import { logger } from '../../utils/logger.js';
 
 export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false, chatId = null, priceMap = {}) {
-  // Extract relevant balances
-  const relevantBalances = extractRelevantBalances(balances, indicators, priceMap);
+  // Build trading stats FIRST using actual physical balances to cap any inconsistencies
+  const tradingStats = dbConnected ? await getTradingPerformance(chatId, balances) : null;
+
+  // Extract relevant balances, masking crypto with bot-managed positions (Option B)
+  const managedPositions = tradingStats?.openPositions || [];
+  const relevantBalances = extractRelevantBalances(balances, indicators, priceMap, managedPositions);
 
   // Extract open orders array (handle both formats)
   const openOrdersArray = Array.isArray(openOrders?.data)
@@ -120,9 +124,6 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
     };
   });
 
-  // Build trading stats
-  const tradingStats = dbConnected ? await getTradingPerformance(chatId) : null;
-
   const tradingStatsForClaude = tradingStats ? {
     winRate: tradingStats.winRate,
     winningTrades: tradingStats.winningTrades,
@@ -171,7 +172,7 @@ function calculateATR(candles, period = 14) {
   return parseFloat(atr.toFixed(4));
 }
 
-function extractRelevantBalances(balances, indicators = {}, priceMap = {}) {
+function extractRelevantBalances(balances, indicators = {}, priceMap = {}, managedPositions = []) {
   if (!balances) return {};
 
   const structured = {
@@ -199,14 +200,20 @@ function extractRelevantBalances(balances, indicators = {}, priceMap = {}) {
       structured.fiat[b.currency] = fiatAmount;
       if (b.currency === 'USD') totalUSD = fiatAmount;
     } else {
+      // Option B masking: only include crypto if the bot manages it
+      const managedPos = managedPositions.find(p => p.symbol.startsWith(b.currency + '-'));
+      const botQty = managedPos ? managedPos.qty : 0;
+      
+      if (botQty <= 0) continue;
+
       const pairKey = Object.keys(indicators).find(k => k.startsWith(b.currency + '-'));
       const currentPrice = pairKey ? indicators[pairKey].currentPrice : (priceMap[b.currency] || 0);
-      const estimatedUsdValue = currentPrice ? parseFloat((total * currentPrice).toFixed(2)) : null;
+      const estimatedUsdValue = currentPrice ? parseFloat((botQty * currentPrice).toFixed(2)) : null;
 
       if (estimatedUsdValue !== null && estimatedUsdValue < 1) continue;
 
       structured.crypto[b.currency] = {
-        amount: total,
+        amount: botQty,
         estimatedUsdValue
       };
       if (estimatedUsdValue) totalCryptoUSD += estimatedUsdValue;

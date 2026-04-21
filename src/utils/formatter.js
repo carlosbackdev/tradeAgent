@@ -13,7 +13,7 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
 
   msg += `🌍 <b>RESUMEN DEL MERCADO</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `<pre>${escapeHTML(decision.marketSummary)}</pre>\n\n`;
+  msg += `<code>${escapeHTML(decision.marketSummary)}</code>\n\n`;
 
   msg += `⚡ <b>DECISIONES</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
@@ -48,7 +48,7 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
       }
 
       msg += `\n💡 <b>RAZONAMIENTO</b>\n`;
-      msg += `<code>${escapeHTML(result.reasoning)}</code>\n`;
+      msg += `<pre>${escapeHTML(result.reasoning)}</pre>\n`;
       msg += `━━━━━━━━━━━━━━━━━━━━\n`;
     }
   }
@@ -61,7 +61,7 @@ export function formatInitMessage({ username, cronStatus, mode, pairs }) {
   const cronDesc = cronStatus.enabled ? `✅ <code>${CronParse(cronStatus.schedule)}</code>` : '⏸️ <i>desactivado</i>';
   const pairsList = Array.isArray(pairs) && pairs.length > 0 ? pairs.join(', ') : '<i>no configurados</i>';
 
-  let msg = `═══ 🤖 <b>REVOLUT X HUB</b> ═══\n\n`;
+  let msg = `═══ 🤖 <b>REVOLUT X AGENT</b> ═══\n\n`;
   msg += `¡Hola${display}! Bienvenido a tu centro de mando.\n\n`;
   msg += `<i>Analizo el mercado, gestiono tu cartera y ejecuto operaciones automáticas con precisión quirúrgica.</i>\n\n`;
 
@@ -75,7 +75,7 @@ export function formatInitMessage({ username, cronStatus, mode, pairs }) {
   return msg;
 }
 
-export function formatStatsMessage({ stats, performance, invested, openPositions }) {
+export function formatStatsMessage({ stats, performance, invested, openPositions, manualPositions = [] }) {
   let msg = `═══ 📊 <b>ESTADÍSTICAS AGENTE</b> ═══\n\n`;
 
   msg += `📈 <b>ACTIVIDAD</b>\n`;
@@ -96,13 +96,21 @@ export function formatStatsMessage({ stats, performance, invested, openPositions
   msg += `✅ <b>Ganancia:</b> ${stats.winningTrades} | ❌ <b>Pérdida:</b> ${stats.losingTrades}\n`;
   msg += `📊 <b>Cerradas:</b> ${stats.closedTrades} | 🎯 <b>Win Rate:</b> ${stats.winRate}\n\n`;
 
-  msg += `📂 <b>POSICIONES ABIERTAS</b>\n`;
+  msg += `📂 <b>POSICIONES (GESTIONADAS)</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
   if (!openPositions || openPositions.length === 0) {
-    msg += `<i>No hay posiciones abiertas actualmente.</i>\n`;
+    msg += `<i>No hay posiciones abiertas por el agente en este momento.</i>\n`;
   } else {
     for (const pos of openPositions) {
       msg += `  • <b>${pos.symbol}:</b> ${pos.qty} @ $${pos.price} (coste $${pos.cost})\n`;
+    }
+  }
+
+  if (manualPositions && manualPositions.length > 0) {
+    msg += `\n💼 <b>BILLETERA MANUAL (Reservada)</b>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━\n`;
+    for (const pos of manualPositions) {
+      msg += `  • <b>${pos.symbol}:</b> ${pos.qty} (No gestionadas por el bot)\n`;
     }
   }
 

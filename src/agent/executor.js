@@ -228,7 +228,10 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     let availableMoney = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
     availableMoney += parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
     const hasFundsToBuy = availableMoney >= minOrderUsd;
-    const hasCoinBalance = coinBalance > 0;
+    
+    // Option B: Only consider managed balance, not manual balance
+    const managedAmount = analyzerContext.balances.crypto[baseCurrency]?.amount || 0;
+    const hasCoinBalance = managedAmount > 0;
 
     if (!hasFundsToBuy && !hasCoinBalance) {
       const msg = `💤 *${coin}*: Sin fondos suficientes ($${availableMoney.toFixed(2)} < $${minOrderUsd}) y sin balance de ${baseCurrency}. Ciclo pausado.`;
@@ -302,7 +305,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       effectiveConfig,
       rendimiento,
       dbConnected,
-      chatId
+      chatId,
+      analyzerContext.tradingStats?.openPositions || []
     );
 
     // ── 8. Notify via Telegram ─────────────────────────────────────
