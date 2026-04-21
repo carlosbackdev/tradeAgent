@@ -23,8 +23,9 @@ function updateClockOffset(serverTimestampMs) {
 
 export class RevolutClient {
   constructor(userConfig = null) {
-    const revConfig = userConfig?.revolut || config.revolut;
-    const debugConfig = userConfig?.debug || config.debug;
+    this.config = userConfig || config;
+    const revConfig = this.config.revolut || config.revolut;
+    const debugConfig = this.config.debug || config.debug;
 
     this.baseUrl = revConfig.baseUrl;
     this.apiKey = revConfig.apiKey || revConfig.REVOLUT_API_KEY;

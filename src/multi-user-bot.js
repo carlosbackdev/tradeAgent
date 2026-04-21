@@ -150,7 +150,7 @@ async function handleAdminCommand(chatId, text) {
     if (result.ok) {
       // Destroy their active session
       const user = await findUserByTelegramId(result.userId);
-      if (user) sessions.delete(user.telegram_id);
+      if (user) sessions.delete(String(user.telegram_id));
       await sendMessage(chatId, `🚫 @${result.username} ha sido suspendido.`);
     } else {
       await sendMessage(chatId, `⚠️ ${result.reason}`);
@@ -241,7 +241,7 @@ async function activateUserSession(user) {
   });
 
   await session.init();
-  sessions.set(user.telegram_id, session);
+  sessions.set(String(user.telegram_id), session);
   logger.info(`✅ Session activated for user ${user.telegram_username} (${user.telegram_id})`);
   return session;
 }
@@ -357,8 +357,10 @@ async function routeUpdate(update) {
 
   // ── Active user — route to their session ─────────────────────────
   if (user.status === 'active') {
-    let session = sessions.get(user.telegram_id);
+    logger.info(`Routing update for active user ${user.telegram_username} (${chatId})`);
+    let session = sessions.get(String(user.telegram_id));
     if (!session) {
+      logger.info(`No active session found for user ${chatId}, creating one...`);
       session = await activateUserSession(user);
     }
 

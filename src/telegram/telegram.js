@@ -7,9 +7,9 @@ import { config } from '../config/config.js';
 
 const BASE = 'https://api.telegram.org';
 
-export async function send(text) {
+export async function send(text, targetChatId = null) {
   const token  = config.telegram.botToken;
-  const chatId = config.telegram.chatId;
+  const chatId = targetChatId || config.telegram.chatId;
 
   if (!token || !chatId) {
     throw new Error(`[telegram] Missing BOT_TOKEN or CHAT_ID`);
@@ -23,6 +23,7 @@ export async function send(text) {
       chat_id:    chatId,
       text,
       disable_web_page_preview: true,
+      parse_mode: 'HTML',
     }),
   });
 

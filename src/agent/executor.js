@@ -204,7 +204,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       );
 
       if (processResult.status === 'error') {
-        await notify(`❌ *${coin}*: Open orders failed: ${processResult.error}`).catch(() => { });
+        await notify(`❌ *${coin}*: Open orders failed: ${processResult.error}`, chatId).catch(() => { });
         return {
           decision: null,
           execResults: [],
@@ -213,7 +213,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       }
 
       logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
-      await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`).catch(() => { });
+      await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`, chatId).catch(() => { });
       return {
         decision: null,
         execResults: [],
@@ -233,7 +233,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     if (!hasFundsToBuy && !hasCoinBalance) {
       const msg = `💤 *${coin}*: Sin fondos suficientes ($${availableMoney.toFixed(2)} < $${minOrderUsd}) y sin balance de ${baseCurrency}. Ciclo pausado.`;
       logger.info(`⏭️  Skipping Claude for ${coin}: no funds and no ${baseCurrency} balance`);
-      await notify(msg).catch(() => { });
+      await notify(msg, chatId).catch(() => { });
       return {
         decision: null,
         execResults: [],
@@ -309,7 +309,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     try {
       const message = formatDecision({ decision, execResults, elapsed, triggerReason });
-      await notify(message);
+      await notify(message, chatId);
       logger.info('📤 Telegram notification sent');
     } catch (err) {
       logger.error('Failed to send Telegram notification:', err.message);
@@ -330,7 +330,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
   } catch (err) {
     const msg = `❌ Agent cycle failed: ${err.message || err}`;
     logger.error(msg);
-    await notifyError(msg).catch(() => { });
+    await notifyError(msg, chatId).catch(() => { });
     throw err;
   } finally {
     if (dbConnected) {

@@ -151,7 +151,7 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
           qty: orderResult.qty || 'pte.',
           usdAmount: usd.toFixed(2),
           price: currentPrice.toFixed(2),
-        });
+        }, chatId);
       } catch (err) {
         logger.warn(`⚠️  Failed to notify order execution: ${err.message}`);
       }
@@ -192,7 +192,7 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
       execResults.push({ ...d, rendimiento, status: 'error', error: err.message });
       errorCount++;
       logger.error(`❌ ${d.symbol}: ${err.message}`);
-      await notifyError(`Order failed for ${d.symbol}: ${err.message}`).catch(() => { });
+      await notifyError(`Order failed for ${d.symbol}: ${err.message}`, chatId).catch(() => { });
     }
   }
 

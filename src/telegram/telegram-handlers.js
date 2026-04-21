@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { runAgentCycle } from '../agent/executor.js';
 import { logger } from '../utils/logger.js';
-import { CronParse } from '../utils/formatter.js';
+import { CronParse, formatInitMessage, formatStartMessage, formatStatsMessage, formatAskMessage, formatConfigMessage, formatPromptMessage, formatHelpMessage, formatAgentStatusMessage } from '../utils/formatter.js';
 import { getTradingStats, getTradingPerformance } from '../utils/mongodb.js';
 import { config } from '../config/config.js';
 import { CRON_PRESETS } from './entities/cronPresets.js';
@@ -65,19 +65,17 @@ export class TelegramHandlers {
         }
 
         const uConfig = this.ctx.readEnvFile();
-        const dry = uConfig.debug.dryRun ? '🔒 DRY_RUN' : '🔴 LIVE TRADING';
+        const mode = uConfig.debug.dryRun ? '🔒 DRY_RUN' : '🔴 LIVE TRADING';
+        const pairs = uConfig.trading.pairs || [];
 
-        await this.ctx.sendMessage(
-            `🤖 <b>Revolut x Trading Agent inicializado</b>\n\n` +
-            `Agente de trading automatizado con IA para Revolut X\n\n` +
-            `Analiza el mercado, evalua las probabilidades, ` +
-            `Analiza tu cartera y tus operaciones, todo en contexto y con indicadores para ejecutar la mejor decisión.\n\n` +
-            `Las Operaciones se ejecutan automaticamente en Revolut segun la decision tomada por el Agente.\n\n` +
-            `⚙️ <b>Estado del sistema:</b>\n` +
-            `⏰ Cron: ${cronSt.enabled ? `✅ <code>${CronParse(cronSt.schedule)}</code>` : '⏸ desactivado'}\n` +
-            `💰 Modo: ${dry}\n\n`,
-            { parse_mode: 'HTML', reply_markup: initKeyboard }
-        );
+        const statusMsg = formatInitMessage({
+            username: this.ctx.username,
+            cronStatus: cronSt,
+            mode,
+            pairs
+        });
+
+        await this.ctx.sendMessage(statusMsg, { parse_mode: 'HTML', reply_markup: initKeyboard });
     }
     async handleMenu() {
         this.configState.isConfiguring = false;
@@ -112,17 +110,15 @@ export class TelegramHandlers {
     }
 
     async handleAsk() {
-        const pairs = config.trading.pairs;
+        const pairs = this.ctx.readEnvFile().trading.pairs;
         const inline_keyboard = chunk(
             pairs.map(p => ({ text: `❓ ${p}`, callback_data: `ask_coin:${p}` })),
             2
         );
         inline_keyboard.push([{ text: '🔙 ATRÁS', callback_data: '/init' }]);
 
-        await this.ctx.sendMessage(
-            '💬 <b>PREGUNTA AL AGENTE</b>\n\nSelecciona una moneda para analizar con tu pregunta:',
-            { parse_mode: 'HTML', reply_markup: { inline_keyboard } }
-        );
+        const msg = formatAskMessage();
+        await this.ctx.sendMessage(msg, { parse_mode: 'HTML', reply_markup: { inline_keyboard } });
     }
 
     async handleStart() {
@@ -140,41 +136,17 @@ export class TelegramHandlers {
             ],
         };
 
-        await this.ctx.sendMessage(`🤖 <b>REVOLUT X TRADING AGENT</b>
-
-✅ Selecciona una crypto para analizar y operar, El agente analizara la situacion actual y tomara la mejor decisión.
-
-⏰ Para programar analisis y operaciones automaticas, pulsa en el boton CRON (se realiza sobre cada una de nuestra lista
-de cryptomonedas).
-`
-            , { parse_mode: 'HTML', reply_markup: keyboardCoins });
+        const msg = formatStartMessage();
+        await this.ctx.sendMessage(msg, { parse_mode: 'HTML', reply_markup: keyboardCoins });
     }
 
     async handleHelp() {
-        let helpText = '<b>❓ GUÍA DE COMANDOS</b>\n\n' +
-            '<b>⚡ ANÁLISIS MANUAL</b>\n' +
-            'Pulsa para analizar ahora:\n' +
-            '/btc · /eth · /sol · /venice · /xrp\n\n' +
-            '<b>⏰ CRON AUTOMÁTICO</b>\n' +
-            '/cron — Gestión de ciclos automáticos\n' +
-            '/cron_on — Activar bot\n' +
-            '/cron_off — Desactivar bot\n\n' +
-            '<b>ℹ️ INFORMACIÓN</b>\n' +
-            '/status — Configuración actual\n' +
-            '/help — Esta guía';
-
-        if (this.ctx.isAdmin) {
-            helpText += '\n\n<b>👑 ADMINISTRACIÓN</b>\n' +
-                '• <code>/invite @user</code> — Invitar\n' +
-                '• <code>/users</code> — Lista de usuarios\n' +
-                '• <code>/admin_status</code> — Salud del bot';
-        }
-
-        await this.ctx.sendMessage(helpText, { 
+        const msg = formatHelpMessage(this.ctx.isAdmin);
+        await this.ctx.sendMessage(msg, {
             parse_mode: 'HTML',
-            reply_markup: { 
-                inline_keyboard: [[{ text: '🔙 VOLVER AL INICIO', callback_data: '/init' }]] 
-            } 
+            reply_markup: {
+                inline_keyboard: [[{ text: '🔙 VOLVER AL INICIO', callback_data: '/init' }]]
+            }
         });
     }
 
@@ -196,29 +168,15 @@ de cryptomonedas).
 
     async handleStatus() {
         const uConfig = this.ctx.readEnvFile();
-        const dry = uConfig.debug.dryRun ? '🔒 DRY-RUN' : '🟢 REAL MONEY';
+        const mode = uConfig.debug.dryRun ? '🔒 DRY-RUN' : '🟢 REAL MONEY';
         const cronSt = this.ctx.getCronStatus();
-        let parseCron = CronParse(cronSt.schedule);
 
-        await this.ctx.sendMessage(`📊 <b>ESTADO ACTUAL DEL AGENTE</b>
+        const msg = formatAgentStatusMessage({ uConfig, cronSt, mode });
 
-🎯 Pares: <code>${uConfig.trading.pairs.join(',')}</code>
-🧐 Personalidad: <code>${uConfig.trading.personalityAgent}</code>
-🔮 Vision: <code>${uConfig.trading.visionAgent}</code>
-🕯️ Velas: a <code>${uConfig.indicators.candlesInterval}</code> minutos
-
-💰 Max trade: <code>${(uConfig.trading.maxTradeSize * 100).toFixed(0)}%</code>
-💵 Min orden: <code>$${uConfig.trading.minOrderUsd}</code>
-
-🎯 TP: <code>${uConfig.trading.takeProfitPct}%</code>
-🎯 SL: <code>${uConfig.trading.stopLossPct}%</code>
-
-🧠 Modelo: <code>${uConfig.anthropic.model}</code>
-
-⏰ Cron: ${cronSt.enabled ? '✅ ACTIVO' : '⏸ INACTIVO'}
-📅 Ciclo: <code>${parseCron}</code>
-
-${dry}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
+        await this.ctx.sendMessage(msg, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
+        });
     }
 
     async handleTradingStats() {
@@ -232,37 +190,40 @@ ${dry}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 
             return;
         }
 
-        const openPos = stats.openPositions?.length > 0
-            ? '\n\n📂 <b>POSICIONES ABIERTAS</b>\n' + stats.openPositions.map(p =>
-                `  • ${p.symbol}: <code>${p.qty}</code> @ <code>$${p.avgPrice}</code> (coste <code>$${p.totalCost}</code>)`
-              ).join('\n')
-            : '';
+        const perf = {
+            pnlUsd: stats.totalRealizedPnL,
+            roi: stats.roiRealized,
+            totalRendimiento: stats.accumulatedRendimiento
+        };
 
-        const accumRend = stats.accumulatedRendimiento;
-        const accumSign = accumRend > 0 ? '+' : '';
-        const accumEmoji = accumRend > 0 ? '🟢' : accumRend < 0 ? '🔴' : '⚪';
+        const openPositions = (stats.openPositions || []).map(p => ({
+            symbol: p.symbol,
+            qty: p.qty,
+            price: p.avgPrice,
+            cost: p.totalCost
+        }));
 
-        await this.ctx.sendMessage(
-            `📊 <b>ESTADÍSTICAS TRADING AGENT</b>
+        const msg = formatStatsMessage({
+            stats: {
+                totalDecisions: stats.totalDecisions,
+                totalOrders: stats.totalOrders,
+                totalBuys: stats.totalBuys,
+                totalSells: stats.totalSells,
+                executionRatio: stats.executionRate,
+                winningTrades: stats.winningTrades,
+                losingTrades: stats.losingTrades,
+                closedTrades: stats.closedTrades,
+                winRate: stats.winRate
+            },
+            performance: perf,
+            invested: stats.totalInvested,
+            openPositions
+        });
 
-🤔 Total decisions: <code>${stats.totalDecisions}</code>
-📦 Total executed orders: <code>${stats.totalOrders}</code>
-🛒 Total buys: <code>${stats.totalBuys}</code>
-🤝🏻 Total sells: <code>${stats.totalSells}</code>
-⚙️ Ratio de ejecución: <code>${stats.executionRate}</code>
-
-💰 <b>BENEFICIO / PÉRDIDA REALIZADO</b>
-💵 PnL realizado: <code>${stats.totalRealizedPnL} USD</code>
-📈 ROI realizado: <code>${stats.roiRealized}</code>
-💹 Total invertido: <code>$${stats.totalInvested}</code>
-${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
-
-🏆 Winning trades: <code>${stats.winningTrades}</code>
-📉 Losing trades: <code>${stats.losingTrades}</code>
-📊 Closed trades: <code>${stats.closedTrades}</code>
-🎯 Win rate: <code>${stats.winRate}</code>${openPos}`,
-            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } }
-        );
+        await this.ctx.sendMessage(msg, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
+        });
     }
 
     async handleCron(args) {
@@ -336,17 +297,15 @@ ${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
     async handleConfiguration() {
         const userCfg = this.ctx.readEnvFile();
         const keys = this.ctx.isAdmin ? userCfg.editableKeysAdmin : userCfg.editableKeys;
-        let text = '<b>⚙️ CONFIGURACIÓN API</b>\n\n';
-
-        keys.forEach((key, i) => {
+        const params = keys.map(key => {
             const value = userCfg.getRaw(key) || '(—)';
             const display = key.includes('KEY') || key.includes('TOKEN') || key.includes('PEM')
                 ? value.substring(0, 8) + '...'
                 : value;
-            text += `${i + 1}. <code>${key}</code>\n   └ <code>${display}</code>\n`;
+            return { key, value: display };
         });
 
-        text += `\n✍️ <b>Cambio de valores:</b>\nResponde: <code>Número → Valor</code>\nEjemplo: <code>4 → claude-haiku-4-5</code>`;
+        const text = formatConfigMessage(params);
 
         this.configState.mode = 'api';
         this.configState.selectedKey = null;
@@ -536,19 +495,16 @@ ${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
     async handleConfigurationAgent() {
         const userCfg = this.ctx.readEnvFile();
         const keys = userCfg.editableKeysAgent;
-        let text = '<b>🤖 PARÁMETROS DEL AGENTE</b>\n\n';
-
-        keys.forEach((key, i) => {
+        const params = keys.map(key => {
             const value = userCfg.getRaw(key) || '(—)';
             let unit = '';
             if (key.includes('INTERVAL')) unit = ' min';
             if (key.includes('PCT')) unit = ' %';
             if (key.includes('MIN_ORDER')) unit = ' USD';
-
-            text += `${i + 1}. <code>${key}</code>\n   └ <code>${value}${unit}</code>\n`;
+            return { key, value: `${value}${unit}` };
         });
 
-        text += '\n✍️ <b>Cambio de valores:</b>\nResponde: <code>Número → Valor</code>\nEjemplo: <code>8 → 30</code>';
+        const text = formatConfigMessage(params);
 
         this.configState.isConfiguring = true;
         this.configState.mode = 'agent';
@@ -619,7 +575,7 @@ ${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
                 for (const coin of pairs) {
                     await runAgentCycle('manual', coin, '', userCfg);
                 }
-                await this.ctx.editMessage(messageId, '✅ Ciclo completado. Revisa el reporte arriba ↑');
+                await this.ctx.editMessage(messageId, '✅ Ciclo completado. Revisa el reporte abajo ↓');
             } catch (err) {
                 await this.ctx.editMessage(messageId, `❌ Error: ${err.message}`);
             } finally {

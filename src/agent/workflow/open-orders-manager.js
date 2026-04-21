@@ -8,6 +8,7 @@ import { logger } from '../../utils/logger.js';
 import { notify } from '../../telegram/handles.js';
 import { saveOrder, saveDecision } from '../../utils/mongodb.js';
 import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
+import { escapeHTML } from '../../utils/formatter.js';
 
 /**
  * Fetch pending (open) orders for a specific symbol from Revolut API
@@ -46,6 +47,8 @@ export async function processOpenOrders(
     if (!anthConfig || !tradingConfig) {
       throw new Error('Missing effectiveConfig for open order analysis');
     }
+
+    const orderManager = new OrderManager(client);
 
     logger.info(`⏳ Processing ${openOrdersThisCoin.length} open order(s) for ${symbol} with user ${chatId || 'single_user'}...`);
 
@@ -105,7 +108,7 @@ export async function processOpenOrders(
         if (analysis.action === 'cancel') {
           // Cancel the order
           try {
-            await revolutAPI?.cancelOrder?.(orderId);
+            await orderManager.cancelOrder(orderId);
             logger.info(`✅ Cancelled order ${orderId} for ${symbol}`);
             
             results.cancelled++;
@@ -126,14 +129,18 @@ export async function processOpenOrders(
         } else if (analysis.action === 'buy_more') {
           // Place additional BUY order
           logger.info(`📈 Placing BUY_MORE for ${symbol} (Claude confidence: ${analysis.confidence}%)`);
-          const buyQuantity = analysis.buy_more_quantity || (order.quantity || 0);
+          const buyQuantity = analysis.buy_more_quantity || (order.quantity || (order.base_size || 0));
           
           try {
-            const newOrder = await revolutAPI?.placeOrder?.({
+            const currentPrice = indicators[symbol.replace('/', '-')]?.currentPrice || 0;
+            const buyAmount = Number(buyQuantity) * Number(currentPrice);
+
+            const newOrder = await orderManager.placeOrder({
               symbol,
               side: 'buy',
-              quantity: buyQuantity,
               type: 'market',
+              usdAmount: buyAmount,
+              currentPrice
             });
             
             if (newOrder) {
@@ -186,6 +193,12 @@ export async function processOpenOrders(
           // KEEP order as-is
           logger.info(`⏳ Keeping order ${orderId} (confidence: ${analysis.confidence}%)`);
           results.kept++;
+          results.executedOrders.push({
+            id: orderId,
+            type: 'keep',
+            reason: analysis.reasoning,
+            confidence: analysis.confidence
+          });
         }
       } catch (err) {
         logger.error(`❌ Error processing order: ${err.message}`);
@@ -194,13 +207,38 @@ export async function processOpenOrders(
     }
 
     // ── Send Telegram Notification ─────────────────────────────────
-    const summaryMessage = `📋 *Open Orders Processing*\n${symbol}:\n✅ ${results.cancelled} cancelled\n📈 ${results.buy_more_count} buy_more\n⏳ ${results.kept} kept`;
-    
-    try {
-      await notify(summaryMessage);
-      logger.info('📤 Open orders Telegram notification sent');
-    } catch (notifyErr) {
-      logger.warn(`⚠️ Failed to send Telegram notification: ${notifyErr.message}`);
+    if (results.found > 0) {
+      let summaryMessage = `╔════════════════════════╗\n`;
+      summaryMessage += `      📋 <b>OPEN ORDERS</b>\n`;
+      summaryMessage += `╚════════════════════════╝\n`;
+      summaryMessage += `Símbolo: <b>${symbol}</b>\n\n`;
+
+      for (const order of results.cancelledOrders) {
+        summaryMessage += `🔴 <b>CANCELACIÓN</b> (ID: ${order.id.slice(0, 8)}...)\n`;
+        summaryMessage += `  • <b>Confianza:</b> ${order.confidence}%\n`;
+        summaryMessage += `  • <b>Motivo:</b> <code>${escapeHTML(order.reason)}</code>\n\n`;
+      }
+
+      for (const order of results.executedOrders) {
+        if (order.type === 'buy_more') {
+          summaryMessage += `🟢 <b>COMPRA ADICIONAL</b> (Cant: ${order.quantity})\n`;
+          summaryMessage += `  • ID: ${order.id.slice(0, 8)}...\n`;
+          summaryMessage += `  • <b>Motivo:</b> <code>${escapeHTML(order.reason)}</code>\n\n`;
+        }
+      }
+
+      if (results.kept > 0) {
+        summaryMessage += `⏳ Manteniendo <b>${results.kept}</b> orden(es) abierta(s) sin cambios.\n`;
+      }
+
+      summaryMessage += `━━━━━━━━━━━━━━━━━━━━\n`;
+
+      try {
+        await notify(summaryMessage, chatId);
+        logger.info('📤 Open orders Telegram notification sent');
+      } catch (notifyErr) {
+        logger.warn(`⚠️ Failed to send Telegram notification: ${notifyErr.message}`);
+      }
     }
 
     logger.info(`📊 Summary: ${results.cancelled} cancelled, ${results.kept} kept, ${results.buy_more_count} buy_more`);
@@ -209,7 +247,7 @@ export async function processOpenOrders(
     logger.error(`❌ Open orders processing failed: ${err.message}`);
     
     try {
-      await notify(`❌ *Open Orders Error* (${symbol}): ${err.message}`);
+      await notify(`❌ *Open Orders Error* (${symbol}): ${err.message}`, chatId);
     } catch (notifyErr) {
       logger.warn(`⚠️ Failed to send error notification: ${notifyErr.message}`);
     }

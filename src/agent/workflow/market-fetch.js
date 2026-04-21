@@ -12,7 +12,7 @@ export async function fetchMarketData(coin, config) {
 
   logger.info(`📊 Fetching data for: ${coin}`);
 
-  const client = new RevolutClient();
+  const client = new RevolutClient(config);
   const market = new MarketData(client);
 
   const [balances, openOrders, snapshot] = await Promise.all([
@@ -62,7 +62,7 @@ export async function fetchMarketData(coin, config) {
 
   if (totalFiat < config.trading.minOrderUsd) {
     const { notify } = await import('../../telegram/handles.js');
-    await notify(`⚠️ Fondos en USD/EUR insuficientes ($${totalFiat.toFixed(2)}) para abrir nuevas posiciones (mínimo $${config.trading.minOrderUsd}). El agente seguirá monitorizando y cerrando ventas si es necesario.`).catch(() => { });
+    await notify(`⚠️ Fondos en USD/EUR insuficientes ($${totalFiat.toFixed(2)}) para abrir nuevas posiciones (mínimo $${config.trading.minOrderUsd}). El agente seguirá monitorizando y cerrando ventas si es necesario.`, config.chatId).catch(() => { });
   }
 
   return {

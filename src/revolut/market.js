@@ -161,7 +161,7 @@ export class MarketData {
     const [ticker, orderBook, candles] = await Promise.all([
       this.getTicker(symbol),
       this.getOrderBook(symbol, 10),
-      this.getCandles(symbol, { interval: config.indicators.candlesInterval }),
+      this.getCandles(symbol, { interval: this.client.config?.indicators?.candlesInterval || 5 }),
     ]);
 
     logger.info(`📊 Snapshot loaded: ${symbol} | candles=${candles.candles.length}`);

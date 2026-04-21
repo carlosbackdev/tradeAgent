@@ -15,11 +15,14 @@ import crypto from 'crypto';
  */
 export function buildUserConfig(user) {
   const cfg = user.config || {};
+  const isAdmin = process.env.ADMIN_TELEGRAM_ID && String(user.telegram_id) === String(process.env.ADMIN_TELEGRAM_ID);
 
-  // Write the user's private key to a temp file (Revolut client needs a file path)
+  // Write the user's private key to a temp file
   let privateKeyPath = null;
-  if (cfg.REVOLUT_PRIVATE_KEY_PEM) {
-    privateKeyPath = writeUserPrivateKey(user.telegram_id, cfg.REVOLUT_PRIVATE_KEY_PEM);
+  const privateKeyPem = cfg.REVOLUT_PRIVATE_KEY_PEM || (isAdmin ? process.env.REVOLUT_PRIVATE_KEY_PEM : null);
+  
+  if (privateKeyPem) {
+    privateKeyPath = writeUserPrivateKey(user.telegram_id, privateKeyPem);
   }
 
   const parseNum = (val, fallback) => {
@@ -27,45 +30,47 @@ export function buildUserConfig(user) {
     return isNaN(n) ? fallback : n;
   };
 
+  // Admin specifics for fallbacks
+  const getEnv = (key, fallback = '') => process.env[key] || fallback;
+
   return {
     chatId: user.telegram_id,
     revolut: {
-      apiKey: cfg.REVOLUT_API_KEY || '',
-      baseUrl: cfg.REVOLUT_BASE_URL || 'https://sandbox-trading.revolut.com/api/1.0',
-      privateKeyPath: privateKeyPath || cfg.REVOLUT_PRIVATE_KEY_PATH || '',
+      apiKey: cfg.REVOLUT_API_KEY || (isAdmin ? getEnv('REVOLUT_API_KEY') : ''),
+      baseUrl: cfg.REVOLUT_BASE_URL || (isAdmin ? getEnv('REVOLUT_BASE_URL') : 'https://revx.revolut.com'),
+      privateKeyPath: privateKeyPath || cfg.REVOLUT_PRIVATE_KEY_PATH || (isAdmin ? getEnv('REVOLUT_PRIVATE_KEY_PATH') : ''),
     },
     anthropic: {
-      apiKey: cfg.ANTHROPIC_API_KEY || '',
-      model: cfg.ANTHROPIC_MODEL || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+      apiKey: cfg.ANTHROPIC_API_KEY || (isAdmin ? getEnv('ANTHROPIC_API_KEY') : ''),
+      model: cfg.ANTHROPIC_MODEL || (isAdmin ? getEnv('ANTHROPIC_MODEL') : 'claude-haiku-4-5'),
     },
     telegram: {
-      // User interacts via the shared bot token; chatId is their own ID
       botToken: process.env.TELEGRAM_BOT_TOKEN,
       chatId: user.telegram_id,
     },
     trading: {
-      pairs: (cfg.TRADING_PAIRS || 'BTC-USD')
+      pairs: (cfg.TRADING_PAIRS || (isAdmin ? getEnv('TRADING_PAIRS', 'BTC-USD') : 'BTC-USD'))
         .split(',')
         .map(p => p.trim())
         .filter(Boolean),
-      maxTradeSize: parseNum(cfg.MAX_TRADE_SIZE, 0.10),
-      minOrderUsd: parseNum(cfg.MIN_ORDER, 50),
-      takeProfitPct: parseNum(cfg.TAKE_PROFIT_PCT, 0),
-      stopLossPct: parseNum(cfg.STOP_LOSS_PCT, 0),
-      visionAgent: cfg.VISION_AGENT || 'short',
-      personalityAgent: cfg.PERSONALITY_AGENT || 'moderate',
+      maxTradeSize: parseNum(cfg.MAX_TRADE_SIZE || (isAdmin ? getEnv('MAX_TRADE_SIZE') : ''), 0.10),
+      minOrderUsd: parseNum(cfg.MIN_ORDER || (isAdmin ? getEnv('MIN_ORDER') : ''), 50),
+      takeProfitPct: parseNum(cfg.TAKE_PROFIT_PCT || (isAdmin ? getEnv('TAKE_PROFIT_PCT') : ''), 0),
+      stopLossPct: parseNum(cfg.STOP_LOSS_PCT || (isAdmin ? getEnv('STOP_LOSS_PCT') : ''), 0),
+      visionAgent: cfg.VISION_AGENT || (isAdmin ? getEnv('VISION_AGENT') : 'short'),
+      personalityAgent: cfg.PERSONALITY_AGENT || (isAdmin ? getEnv('PERSONALITY_AGENT') : 'moderate'),
     },
     cron: {
-      enabled: cfg.CRON_ENABLED === 'true',
-      schedule: cfg.CRON_SCHEDULE || '*/15 * * * *',
+      enabled: (cfg.CRON_ENABLED || (isAdmin ? getEnv('CRON_ENABLED') : 'false')) === 'true',
+      schedule: cfg.CRON_SCHEDULE || (isAdmin ? getEnv('CRON_SCHEDULE') : '*/15 * * * *'),
     },
     indicators: {
-      candlesInterval: parseInt(cfg.INDICATORS_CANDLES_INTERVAL || '5') || 5,
+      candlesInterval: parseInt(cfg.INDICATORS_CANDLES_INTERVAL || (isAdmin ? getEnv('INDICATORS_CANDLES_INTERVAL') : '5')) || 5,
     },
     debug: {
-      dryRun: cfg.DRY_RUN === 'true',
-      logLevel: cfg.LOG_LEVEL || 'info',
-      debugApi: cfg.DEBUG_API === 'true',
+      dryRun: (cfg.DRY_RUN || (isAdmin ? getEnv('DRY_RUN') : 'false')) === 'true',
+      logLevel: cfg.LOG_LEVEL || (isAdmin ? getEnv('LOG_LEVEL') : 'info'),
+      debugApi: (cfg.DEBUG_API || (isAdmin ? getEnv('DEBUG_API') : 'false')) === 'true',
     },
     mongodb: {
       uri: process.env.MONGODB_URI || 'mongodb://localhost:27017',

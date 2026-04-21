@@ -48,6 +48,7 @@ export class UserSession {
       getCronStatus: () => self.getCronStatus(),
       get cronSchedule() { return userConfig.cron.schedule; },
       set cronSchedule(s) { userConfig.cron.schedule = s; },
+      username: this.username
     };
 
     this.handlers = new TelegramHandlers(this.botContext);

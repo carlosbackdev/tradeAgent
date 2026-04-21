@@ -10,7 +10,7 @@ import { config } from '../config/config.js';
 export class OrderManager {
   constructor(client) {
     this.client = client;
-    this.dryRun = config.debug.dryRun;
+    this.dryRun = this.client.config?.debug?.dryRun ?? config.debug.dryRun;
   }
 
   _toDashedSymbol(symbol) {

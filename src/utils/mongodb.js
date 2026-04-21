@@ -282,7 +282,7 @@ export async function getTradingStats(chatId = null) {
 
   const query = {};
   if (chatId) query.chat_id = String(chatId);
-  else query.chat_id = 'single_user';
+  else return null; // No stats without a user context in multi-user mode
 
   try {
     const [totalOrders, totalDecisions, totalBuys, totalSells] = await Promise.all([
@@ -321,7 +321,7 @@ export async function getTradingPerformance(chatId = null) {
 
   const query = {};
   if (chatId) query.chat_id = String(chatId);
-  else query.chat_id = 'single_user';
+  else return null; 
 
   try {
     // Parallel: fetch all executed orders + decision count
@@ -465,7 +465,7 @@ export async function getAccumulatedRendimiento(chatId = null) {
     rendimiento: { $ne: null, $type: 'double' }
   };
   if (chatId) query.chat_id = String(chatId);
-  else query.chat_id = 'single_user';
+  else return 0;
 
   try {
     const sellOrders = await ordersCollection
