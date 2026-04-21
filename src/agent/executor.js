@@ -150,9 +150,13 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     analyzerContext.lastExecutedOrder = lastOrder;
     analyzerContext.rendimiento = rendimiento;
     // lastPrice = price at the time of the most recent previous decision for this coin
-    analyzerContext.lastPrice = previousDecisionsBySymbol[snapshot.symbol]?.[0]?.price
-      || lastOrder?.price
-      || 0;
+    const lastPrice = previousDecisionsBySymbol[snapshot.symbol]?.[0]?.price || lastOrder?.price || 0;
+    const currentPrice = indicators[snapshot.symbol]?.currentPrice || 0;
+    
+    analyzerContext.lastPrice = lastPrice;
+    analyzerContext.priceChangeSinceLastAnalysisPct = (lastPrice > 0 && currentPrice > 0)
+      ? parseFloat(((currentPrice - lastPrice) / lastPrice * 100).toFixed(2))
+      : 0;
 
     // ── 4.2 Check for open orders (with FULL context) ────────────────
     // openOrders already fetched from fetchMarketData
