@@ -14,7 +14,8 @@ import {
   disconnectDB,
   getPreviousDecisions,
   getExecutedOrders,
-  getDecisionById
+  getDecisionById,
+  getOpenPositionSummary
 } from '../utils/mongodb.js';
 import { callAgentAnalyzer } from './services/clientAgent.js';
 import { config } from '../config/config.js';
@@ -73,17 +74,34 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       throw new Error('No valid indicators computed — not enough historical data');
     }
 
-    // ── 3. Check SL/TP and fetch last order (EARLY) ──────────────────
+    // ── 3. Fetch open lots and check SL/TP (EARLY) ──────────────────
+    let openPositionSummary = null;
+    let recentSells = [];
     let lastOrder = null;
     let rendimiento = null;
 
     if (dbConnected) {
       try {
+        const currentPrice = indicators[snapshot.symbol]?.currentPrice || 0;
+        openPositionSummary = await getOpenPositionSummary(coin, currentPrice, chatId);
+
+        if (openPositionSummary && openPositionSummary.openLots.length > 0) {
+          const oldestLot = openPositionSummary.oldestOpenLot;
+          const querySymbol = { $in: [snapshot.symbol, snapshot.symbol.replace('-', '/')] };
+          recentSells = await getExecutedOrders(10, {
+            symbol: querySymbol,
+            side: 'sell',
+            status: 'executed',
+            chat_id: String(chatId),
+            created_at: { $gte: oldestLot.created_at }
+          });
+        }
+
+        // Keep last order fetch for legacy UI/fallback formatting
         const querySymbol = { $in: [snapshot.symbol, snapshot.symbol.replace('-', '/')] };
-        const orders = await getExecutedOrders(1, { symbol: querySymbol, status: 'executed', chat_id: chatId });
+        const orders = await getExecutedOrders(1, { symbol: querySymbol, status: 'executed', chat_id: String(chatId) });
         if (orders.length > 0) {
           lastOrder = orders[0];
-
           if (lastOrder.decision_id) {
             const decisionContext = await getDecisionById(lastOrder.decision_id);
             if (decisionContext) {
@@ -100,18 +118,18 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
           }
         }
       } catch (err) {
-        logger.warn(`⚠️ Failed to fetch last order context: ${err.message}`);
+        logger.warn(`⚠️ Failed to fetch position summary context: ${err.message}`);
       }
     }
 
     // Check for forced decisions (SL/TP)
     const { forcedDecision, rendimiento: calculatedRendimiento } = await checkForcedDecisions(
-      lastOrder,
       indicators[snapshot.symbol],
       coin,
       balanceArray,
       effectiveConfig,
-      dbConnected
+      dbConnected,
+      chatId
     );
     rendimiento = calculatedRendimiento;
 
@@ -146,15 +164,17 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       priceMap
     );
 
-    // Merge previous decisions and rendimiento
+    // Merge previous decisions and open position context
     analyzerContext.previousDecisions = previousDecisionsBySymbol;
+    analyzerContext.openLots = openPositionSummary?.openLots || [];
+    analyzerContext.recentSells = recentSells;
     analyzerContext.lastExecutedOrder = lastOrder;
     analyzerContext.rendimiento = rendimiento;
     analyzerContext.rendimientoAcumulado = analyzerContext.tradingStats?.accumulatedRendimiento ?? null;
     // lastPrice = price at the time of the most recent previous decision for this coin
     const lastPrice = previousDecisionsBySymbol[snapshot.symbol]?.[0]?.price || lastOrder?.price || 0;
     const currentPrice = indicators[snapshot.symbol]?.currentPrice || 0;
-    
+
     analyzerContext.currentPrice = currentPrice;
     analyzerContext.lastPrice = lastPrice;
     analyzerContext.priceChangeSinceLastAnalysisPct = (lastPrice > 0 && currentPrice > 0)
@@ -228,7 +248,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     let availableMoney = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
     availableMoney += parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
     const hasFundsToBuy = availableMoney >= minOrderUsd;
-    
+
     // Option B: Only consider managed balance, not manual balance
     const managedAmount = analyzerContext.balances.crypto[baseCurrency]?.amount || 0;
     const hasCoinBalance = managedAmount > 0;
@@ -301,7 +321,6 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       coin,
       balanceArray,
       indicators,
-      lastOrder,
       effectiveConfig,
       rendimiento,
       dbConnected,

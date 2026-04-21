@@ -130,6 +130,9 @@ export async function saveOrder({
   error,
   rendimiento,
   chatId,
+  realizedPnlUsd = null,
+  realizedRoiPct = null,
+  fifoMatches = null,
 }) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
@@ -139,6 +142,9 @@ export async function saveOrder({
     return isNaN(p) ? null : p;
   };
 
+  const parsedQty = safeParse(qty);
+  const parsedPrice = safeParse(price);
+
   const doc = {
     created_at: new Date(),
     chat_id: chatId ? String(chatId) : null,
@@ -146,8 +152,8 @@ export async function saveOrder({
     symbol,
     side,
     order_type: orderType,
-    qty: safeParse(qty),
-    price: safeParse(price),
+    qty: parsedQty,
+    price: parsedPrice,
     position_pct: safeParse(positionPct),
     usd_amount: safeParse(usdAmount),
     revolut_order_id: revolutOrderId,
@@ -158,6 +164,19 @@ export async function saveOrder({
     error: error || null,
     rendimiento: rendimiento !== undefined ? safeParse(rendimiento) : null,
   };
+
+  if (status === 'executed') {
+    if (side === 'buy' && parsedQty && parsedPrice) {
+      doc.remaining_qty = parsedQty;
+      doc.remaining_cost_usd = parsedQty * parsedPrice;
+      doc.lot_status = 'open';
+      doc.closed_at = null;
+    } else if (side === 'sell') {
+      doc.realized_pnl_usd = realizedPnlUsd !== null ? safeParse(realizedPnlUsd) : null;
+      doc.realized_roi_pct = realizedRoiPct !== null ? safeParse(realizedRoiPct) : null;
+      doc.fifo_matches = fifoMatches || [];
+    }
+  }
 
   try {
     const result = await ordersCollection.insertOne(doc);
@@ -268,6 +287,166 @@ export async function getExecutedOrders(limit = 5, filter = {}) {
 }
 
 /**
+ * Get open BUY lots (FIFO order)
+ */
+export async function getOpenBuyLots(symbol, chatId = null) {
+  const db = await connectDB();
+  const ordersCollection = db.collection('orders');
+
+  const querySymbol = { $in: [symbol, symbol.replace('-', '/'), symbol.replace('/', '-')] };
+  const query = {
+    symbol: querySymbol,
+    side: 'buy',
+    lot_status: { $in: ['open', 'partially_closed'] }
+  };
+  if (chatId) query.chat_id = String(chatId);
+
+  try {
+    const lots = await ordersCollection
+      .find(query)
+      .sort({ created_at: 1 }) // FIFO
+      .toArray();
+
+    return lots.map(lot => ({
+      ...lot,
+      remaining_qty: Number(lot.remaining_qty),
+      remaining_cost_usd: Number(lot.remaining_cost_usd),
+    })).filter(lot => lot.remaining_qty > 0);
+  } catch (err) {
+    logger.warn(`Failed to get open buy lots for ${symbol}: ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Apply a SELL execution to open BUY lots (FIFO matching)
+ */
+export async function applySellToOpenLots(symbol, sellQty, sellPrice, chatId = null) {
+  const db = await connectDB();
+  const ordersCollection = db.collection('orders');
+
+  let remainingSellQty = Number(sellQty);
+  let totalRealizedPnlUsd = 0;
+  const fifoMatches = [];
+
+  const openLots = await getOpenBuyLots(symbol, chatId);
+
+  for (const lot of openLots) {
+    if (remainingSellQty <= 0.00000001) break;
+
+    const lotRemainingQty = Number(lot.remaining_qty);
+    if (lotRemainingQty <= 0) continue;
+
+    const consumeQty = Math.min(lotRemainingQty, remainingSellQty);
+    const costPerUnit = Number(lot.price);
+    const exitValue = consumeQty * Number(sellPrice);
+    const entryCost = consumeQty * costPerUnit;
+    const pnlUsd = exitValue - entryCost;
+    const roiPct = entryCost > 0 ? (pnlUsd / entryCost) * 100 : 0;
+
+    fifoMatches.push({
+      buy_order_id: lot._id,
+      qty_closed: consumeQty,
+      entry_price: costPerUnit,
+      exit_price: Number(sellPrice),
+      pnl_usd: Number(pnlUsd.toFixed(2)),
+      roi_pct: Number(roiPct.toFixed(2)),
+      entry_created_at: lot.created_at
+    });
+
+    totalRealizedPnlUsd += pnlUsd;
+    remainingSellQty -= consumeQty;
+
+    const newRemainingQty = lotRemainingQty - consumeQty;
+    const newRemainingCostUsd = newRemainingQty * costPerUnit;
+    const newLotStatus = newRemainingQty > 0.00000001 ? 'partially_closed' : 'closed';
+
+    const updateDoc = {
+      $set: {
+        remaining_qty: newRemainingQty,
+        remaining_cost_usd: newRemainingCostUsd,
+        lot_status: newLotStatus
+      }
+    };
+    if (newLotStatus === 'closed') {
+      updateDoc.$set.closed_at = new Date();
+    }
+
+    await ordersCollection.updateOne({ _id: lot._id }, updateDoc);
+  }
+
+  const totalCostBasis = fifoMatches.reduce((sum, m) => sum + (m.qty_closed * m.entry_price), 0);
+  const realizedRoiPct = totalCostBasis > 0 ? (totalRealizedPnlUsd / totalCostBasis) * 100 : 0;
+
+  return {
+    fifoMatches,
+    realizedPnlUsd: Number(totalRealizedPnlUsd.toFixed(2)),
+    realizedRoiPct: Number(realizedRoiPct.toFixed(2)),
+    totalQtyMatched: Number(sellQty) - remainingSellQty
+  };
+}
+
+/**
+ * Get a summary of the real open position from DB lots
+ */
+export async function getOpenPositionSummary(symbol, currentPrice, chatId = null) {
+  const openLots = await getOpenBuyLots(symbol, chatId);
+
+  if (openLots.length === 0) {
+    return {
+      openLots: [],
+      totalOpenQty: 0,
+      totalOpenCost: 0,
+      avgEntryPrice: 0,
+      unrealizedPnlUsd: 0,
+      unrealizedRoiPct: 0,
+      oldestOpenLot: null
+    };
+  }
+
+  let totalOpenQty = 0;
+  let totalOpenCost = 0;
+
+  const enrichedLots = openLots.map(lot => {
+    const remainingQty = Number(lot.remaining_qty);
+    const entryPrice = Number(lot.price);
+    const cost = remainingQty * entryPrice;
+
+    totalOpenQty += remainingQty;
+    totalOpenCost += cost;
+
+    const currentValue = remainingQty * Number(currentPrice);
+    const pnlUsd = currentValue - cost;
+    const roiPct = cost > 0 ? (pnlUsd / cost) * 100 : 0;
+
+    return {
+      _id: lot._id,
+      created_at: lot.created_at,
+      remaining_qty: remainingQty,
+      entry_price: entryPrice,
+      remaining_cost_usd: cost,
+      unrealized_pnl_usd: Number(pnlUsd.toFixed(2)),
+      unrealized_roi_pct: Number(roiPct.toFixed(2))
+    };
+  });
+
+  const avgEntryPrice = totalOpenQty > 0 ? totalOpenCost / totalOpenQty : 0;
+  const totalCurrentValue = totalOpenQty * Number(currentPrice);
+  const unrealizedPnlUsd = totalCurrentValue - totalOpenCost;
+  const unrealizedRoiPct = totalOpenCost > 0 ? (unrealizedPnlUsd / totalOpenCost) * 100 : 0;
+
+  return {
+    openLots: enrichedLots,
+    totalOpenQty: Number(totalOpenQty.toFixed(8)),
+    totalOpenCost: Number(totalOpenCost.toFixed(2)),
+    avgEntryPrice: Number(avgEntryPrice.toFixed(8)),
+    unrealizedPnlUsd: Number(unrealizedPnlUsd.toFixed(2)),
+    unrealizedRoiPct: Number(unrealizedRoiPct.toFixed(2)),
+    oldestOpenLot: enrichedLots.length > 0 ? enrichedLots[0] : null
+  };
+}
+
+/**
  * Get trading statistics
  * @returns {Object} Trading stats
  */
@@ -321,7 +500,7 @@ export async function getTradingPerformance(chatId = null, realBalances = null) 
 
   const query = {};
   if (chatId) query.chat_id = String(chatId);
-  else return null; 
+  else return null;
 
   try {
     // Parallel: fetch all executed orders + decision count
@@ -345,7 +524,7 @@ export async function getTradingPerformance(chatId = null, realBalances = null) 
         .toFixed(2)
     );
 
-    // ── Walk orders chronologically, tracking per-symbol positions ──
+    // ── Walk orders chronologically, tracking per-symbol positions (FIFO) ──
     const positions = {};
     let totalRealizedPnL = 0;
     let totalInvested = 0;
@@ -367,41 +546,43 @@ export async function getTradingPerformance(chatId = null, realBalances = null) 
       }
 
       if (!positions[symbol]) {
-        positions[symbol] = { qty: 0, totalCost: 0, avgPrice: 0, realizedPnL: 0 };
+        positions[symbol] = { openLots: [], realizedPnL: 0 };
       }
 
       const pos = positions[symbol];
 
       if (order.side === 'buy') {
-        pos.totalCost += qty * price;
-        pos.qty += qty;
-        pos.avgPrice = pos.qty > 0 ? pos.totalCost / pos.qty : 0;
         totalInvested += qty * price;
         totalBuys++;
+        pos.openLots.push({ qty, price });
       }
 
       if (order.side === 'sell') {
         totalSells++;
-        // Never sell more than we hold to avoid negative positions
-        const sellQty = Math.min(qty, pos.qty);
 
-        if (sellQty > 0) {
-          const pnl = (price - pos.avgPrice) * sellQty;
-          pos.realizedPnL += pnl;
-          totalRealizedPnL += pnl;
+        let remainingSellQty = qty;
+        let sellPnl = 0;
 
-          if (pnl > 0) winningTrades++;
-          else if (pnl < 0) losingTrades++;
+        // FIFO consumption
+        while (remainingSellQty > 0.00000001 && pos.openLots.length > 0) {
+          const oldestLot = pos.openLots[0];
+          const consumeQty = Math.min(oldestLot.qty, remainingSellQty);
 
-          pos.qty -= sellQty;
-          pos.totalCost -= pos.avgPrice * sellQty;
+          const pnl = (price - oldestLot.price) * consumeQty;
+          sellPnl += pnl;
 
-          if (pos.qty <= 0) {
-            pos.qty = 0;
-            pos.totalCost = 0;
-            pos.avgPrice = 0;
+          oldestLot.qty -= consumeQty;
+          if (oldestLot.qty <= 0.00000001) {
+            pos.openLots.shift(); // fully consumed
           }
+          remainingSellQty -= consumeQty;
         }
+
+        pos.realizedPnL += sellPnl;
+        totalRealizedPnL += sellPnl;
+
+        if (sellPnl > 0) winningTrades++;
+        else if (sellPnl < 0) losingTrades++;
       }
     }
 
@@ -413,22 +594,27 @@ export async function getTradingPerformance(chatId = null, realBalances = null) 
     // Option B + Visibility: Cap MongoDB positions at physical balances, and expose un-managed balances to UI
     if (realBalances) {
       const balanceArray = Array.isArray(realBalances) ? realBalances : (realBalances.data || []);
-      
+
       // 1. Check all physical crypto assets
       for (const realBal of balanceArray) {
         if (['USD', 'EUR', 'GBP'].includes(realBal.currency)) continue;
-        
+
         const realQty = Number(realBal.total || 0);
         if (realQty <= 0) continue;
 
         const trackedPosKey = Object.keys(positions).find(k => k.startsWith(realBal.currency + '-'));
-        const botQty = trackedPosKey && positions[trackedPosKey] ? positions[trackedPosKey].qty : 0;
+        const botQty = trackedPosKey && positions[trackedPosKey]
+          ? positions[trackedPosKey].openLots.reduce((sum, l) => sum + l.qty, 0)
+          : 0;
 
         if (botQty > realQty) {
           // Sync: Bot thinks we have more than we physically do (e.g. manual sell outside app)
           const factor = realQty > 0 ? (realQty / botQty) : 0;
-          positions[trackedPosKey].qty = realQty;
-          positions[trackedPosKey].totalCost *= factor;
+          if (positions[trackedPosKey] && positions[trackedPosKey].openLots) {
+            positions[trackedPosKey].openLots.forEach(lot => {
+              lot.qty *= factor;
+            });
+          }
         } else if (realQty > botQty) {
           // UI: We have physical balance the bot didn't buy (manual deposit / legacy)
           manualPositions.push({
@@ -463,13 +649,17 @@ export async function getTradingPerformance(chatId = null, realBalances = null) 
         : '0%',
       // ── Positions ──
       openPositions: Object.entries(positions)
-        .filter(([, p]) => p.qty > 0 && p.totalCost >= 1)
-        .map(([symbol, p]) => ({
-          symbol,
-          qty: Number(p.qty.toFixed(8)),
-          avgPrice: Number(p.avgPrice.toFixed(8)),
-          totalCost: Number(p.totalCost.toFixed(2))
-        })),
+        .map(([symbol, p]) => {
+          const totalQty = p.openLots.reduce((sum, lot) => sum + lot.qty, 0);
+          const totalCost = p.openLots.reduce((sum, lot) => sum + (lot.qty * lot.price), 0);
+          return {
+            symbol,
+            qty: Number(totalQty.toFixed(8)),
+            avgPrice: totalQty > 0 ? Number((totalCost / totalQty).toFixed(8)) : 0,
+            totalCost: Number(totalCost.toFixed(2))
+          };
+        })
+        .filter(p => p.qty > 0 && p.totalCost >= 1),
       manualPositions, // Explicitly separate manual holdings
       // ── Accumulated rendimiento from stored sell orders (sum, can be negative) ──
       // This is the simple sum of each trade's realized % stored at execution time.

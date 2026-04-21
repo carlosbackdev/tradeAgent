@@ -5,7 +5,7 @@
 
 import { OrderManager } from '../../revolut/orders.js';
 import { notifyOrderExecuted, notifyError } from '../../telegram/handles.js';
-import { saveOrder } from '../../utils/mongodb.js';
+import { saveOrder, applySellToOpenLots } from '../../utils/mongodb.js';
 import { logger } from '../../utils/logger.js';
 
 // ── Position-sizing helpers ────────────────────────────────────────
@@ -24,7 +24,7 @@ function getAvailableCoin(balanceArray, symbol) {
   return parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
 }
 
-export async function executeDecisions(decisions, coin, balanceArray, indicators, lastOrder, config, rendimiento = null, dbConnected = false, chatId = null, managedPositions = []) {
+export async function executeDecisions(decisions, coin, balanceArray, indicators, config, rendimiento = null, dbConnected = false, chatId = null, managedPositions = []) {
   const execResults = [];
   let executedCount = 0, skippedCount = 0, errorCount = 0;
 
@@ -67,7 +67,7 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
         const normalizedSymbol = d.symbol.replace('/', '-');
         const baseCurrency = normalizedSymbol.split('-')[0];
         const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-        
+
         // Option B: Sell ONLY based on bot-managed positions
         const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
         const coinManagedBalance = managedPos ? managedPos.qty : 0;
@@ -165,11 +165,18 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
       if (dbConnected && orderResult) {
         try {
           let orderRendimiento = null;
-          if (d.action.toLowerCase() === 'sell' && lastOrder?.price && currentPrice) {
-            orderRendimiento = parseFloat(
-              (((currentPrice - lastOrder.price) / lastOrder.price) * 100).toFixed(2)
-            );
-            logger.info(`📊 Realised rendimiento for ${d.symbol}: ${orderRendimiento}% (entry $${lastOrder.price} → exit $${currentPrice})`);
+          let realizedPnlUsd = null;
+          let realizedRoiPct = null;
+          let fifoMatches = null;
+
+          if (d.action.toLowerCase() === 'sell' && orderResult.qty && currentPrice) {
+            const sellResult = await applySellToOpenLots(d.symbol, orderResult.qty, currentPrice, chatId);
+            fifoMatches = sellResult.fifoMatches;
+            realizedPnlUsd = sellResult.realizedPnlUsd;
+            realizedRoiPct = sellResult.realizedRoiPct;
+            orderRendimiento = sellResult.realizedRoiPct; // legacy fallback mapping
+
+            logger.info(`📊 Realised FIFO performance for ${d.symbol}: ${orderRendimiento}% (PnL: $${realizedPnlUsd})`);
           }
 
           await saveOrder({
@@ -187,7 +194,10 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
             riskRewardRatio: rrMetrics?.riskRewardRatio || null,
             status: 'executed',
             rendimiento: orderRendimiento,
-            chatId
+            chatId,
+            realizedPnlUsd,
+            realizedRoiPct,
+            fifoMatches
           });
         } catch (err) {
           logger.warn(`⚠️  Failed to save order: ${err.message}`);

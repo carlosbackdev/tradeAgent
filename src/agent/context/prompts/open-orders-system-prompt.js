@@ -21,6 +21,7 @@ Decision Factors:
 - Previous trading decisions and their outcomes
 - Available USD balance (only recommend buy_more if there is enough)
 - Unrealized P&L of the current position (rendimiento_pct)
+- Open Lots (open_lots): Detailed breakdown of your currently active, FIFO-tracked position lots for this symbol.
 - Your personality (${personalityAgent}): aggressiveness of entry/exit decisions
 - Your vision (${visionAgent}-term): patience for order fills and trend alignment
 

@@ -70,6 +70,7 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
       spread_pct: spreadPct,
     },
     trading_history: analyzerContext.previousDecisions?.[symbol] || [],
+    open_lots: analyzerContext.openLots || [],
     account_balance: analyzerContext.balances || {},
   };
 }
@@ -117,6 +118,7 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol) {
     position_info: {
       rendimiento_pct: openOrderContext.rendimiento_pct,
       usd_available_for_buy: openOrderContext.usd_available_for_buy,
+      open_lots: openOrderContext.open_lots,
     },
     previous_decisions_for_symbol: historyText,
     your_task: 'Decide: keep, cancel, or buy_more? Use positionPct (0-1) for buy_more sizing.',

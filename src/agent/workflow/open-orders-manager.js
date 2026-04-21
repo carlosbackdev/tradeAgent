@@ -70,11 +70,11 @@ export async function processOpenOrders(
       try {
         // Step 1: Get Claude decision
         const analysis = await analyzeOpenOrderWithClaude(
-          order, 
-          analyzerContext, 
-          symbol, 
-          anthConfig.apiKey, 
-          anthConfig.model, 
+          order,
+          analyzerContext,
+          symbol,
+          anthConfig.apiKey,
+          anthConfig.model,
           tradingConfig
         );
         const orderId = order.id || order.order_id;
@@ -111,7 +111,7 @@ export async function processOpenOrders(
           try {
             await orderManager.cancelOrder(orderId);
             logger.info(`✅ Cancelled order ${orderId} for ${symbol}`);
-            
+
             results.cancelled++;
             results.cancelledOrders.push({
               id: orderId,
@@ -131,9 +131,9 @@ export async function processOpenOrders(
           // Place additional BUY order
           logger.info(`📈 Placing BUY_MORE for ${symbol} (Claude confidence: ${analysis.confidence}%)`);
           const buyQuantity = analysis.buy_more_quantity || (order.quantity || (order.base_size || 0));
-          
+
           try {
-            const currentPrice = indicators[symbol.replace('/', '-')]?.currentPrice || 0;
+            const currentPrice = analyzerContext.indicators?.[symbol.replace('/', '-')]?.currentPrice || 0;
             const buyAmount = Number(buyQuantity) * Number(currentPrice);
 
             const newOrder = await orderManager.placeOrder({
@@ -143,11 +143,11 @@ export async function processOpenOrders(
               usdAmount: buyAmount,
               currentPrice
             });
-            
+
             if (newOrder) {
               logger.info(`✅ Placed BUY order for ${symbol}: ${buyQuantity} units`);
               results.buy_more_count++;
-              
+
               // Save executed order (like executor does after executeDecisions)
               if (dbConnected && newOrder.id) {
                 try {
@@ -175,7 +175,7 @@ export async function processOpenOrders(
                   logger.warn(`⚠️ Failed to save executed BUY order: ${err.message}`);
                 }
               }
-              
+
               results.executedOrders.push({
                 id: newOrder.id,
                 type: 'buy_more',
@@ -246,13 +246,13 @@ export async function processOpenOrders(
     return results;
   } catch (err) {
     logger.error(`❌ Open orders processing failed: ${err.message}`);
-    
+
     try {
       await notify(`❌ *Open Orders Error* (${symbol}): ${err.message}`, chatId);
     } catch (notifyErr) {
       logger.warn(`⚠️ Failed to send error notification: ${notifyErr.message}`);
     }
-    
+
     return {
       symbol,
       status: 'error',

@@ -16,9 +16,11 @@ You receive processed market data for one or more trading pairs:
 - Technical indicators: RSI(14), MACD, Bollinger Bands, EMA12/26 and a "confluence" object with a "suggestion" (BUY_SIGNAL, SELL_SIGNAL, NEUTRAL) based on objective technical rules.
 - Portfolio balances (USD and crypto assets)
 - previousDecisions: Recent historical context to avoid flip-flopping.
-- lastExecutedOrder: Full details of your previous executed order in this market.
-- rendimiento: The real-time unrealized Profit and Loss percentage relative to your last BUY entry price. Evaluate this to decide whether to Secure Profits or Cut Losses.
-- rendimientoAcumulado: Accumulated realized performance percentage from historical SELL trades (summary metric, not per-trade).
+- openLots: Real open positions (FIFO tracked) showing remaining quantity, cost, and exact entry prices for this symbol.
+- recentSells: Recent sell orders since your oldest open lot, providing context on what you just closed.
+- lastExecutedOrder: Full details of your previous executed order in this market (legacy context).
+- rendimiento: The weighted real-time unrealized Profit and Loss percentage across ALL your open lots for this symbol. Evaluate this to decide whether to Secure Profits or Cut Losses.
+- rendimientoAcumulado: Accumulated realized performance percentage from historical SELL trades (summary metric).
 
 Decide: BUY, SELL, or HOLD for each pair. Use the technical indicators and the "confluence" suggestion as a foundation, but apply your own judgment for confidence and final action. Calculate TP/SL levels.
 

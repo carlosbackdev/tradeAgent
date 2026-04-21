@@ -28,6 +28,8 @@ export function buildAnalyzerMessage(context, question = '') {
     marketData: context.pairs || [],
     indicators: context.indicators || {},
     previousDecisions: context.previousDecisions || {},
+    openLots: context.openLots || [],
+    recentSells: context.recentSells || [],
     lastExecutedOrder: context.lastExecutedOrder || null,
     rendimiento: context.rendimiento !== undefined ? context.rendimiento : null,
     constraints: {
