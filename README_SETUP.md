@@ -127,6 +127,8 @@ ANTHROPIC_API_KEY=sk-ant-v0-...your-key...
 # From Telegram setup above
 TELEGRAM_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh
 TELEGRAM_CHAT_ID=987654321
+# Optional for multi-user deep-link invites
+TELEGRAM_BOT_USERNAME=MyTradeAgentBot
 
 # Trading configuration
 TRADING_PAIRS=BTC/USD,ETH/USD

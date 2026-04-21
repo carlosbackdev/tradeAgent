@@ -111,6 +111,7 @@ cp .env.example .env
 DRY_RUN=true              # Test without real trades
 LOG_LEVEL=debug           # Verbose logging
 DEBUG_API=true            # Log API requests
+TELEGRAM_BOT_USERNAME=MyTradeAgentBot  # Deep-link invites for multi-user mode
 ```
 
 ## ▶️ Running the Agent

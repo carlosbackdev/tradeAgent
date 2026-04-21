@@ -25,6 +25,25 @@ export async function fetchMarketData(coin, config) {
 
   const balanceArray = Array.isArray(balances) ? balances : (balances?.data || []);
 
+  // Build a price map for all non-fiat holdings (USD quotes)
+  const fiatCurrencies = new Set(['USD', 'EUR', 'GBP']);
+  const cryptoHoldings = balanceArray
+    .filter(b => !fiatCurrencies.has(b.currency))
+    .map(b => String(b.currency || '').trim())
+    .filter(Boolean);
+
+  const uniqueCrypto = [...new Set(cryptoHoldings)];
+  const priceMap = {};
+
+  await Promise.all(uniqueCrypto.map(async (base) => {
+    try {
+      const ticker = await market.getTicker(`${base}-USD`);
+      if (ticker?.last) priceMap[base] = Number(ticker.last);
+    } catch (err) {
+      logger.warn(`⚠️ Failed to fetch ticker for ${base}-USD: ${err.message}`);
+    }
+  }));
+
   // Ensure openOrders is always an array
   let ordersArray = [];
   if (Array.isArray(openOrders)) {
@@ -53,6 +72,7 @@ export async function fetchMarketData(coin, config) {
     balanceArray,
     openOrders: ordersArray,
     snapshot,
+    priceMap,
     eurBalance,
     usdBalance,
     totalFiat,

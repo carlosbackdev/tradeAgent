@@ -14,8 +14,12 @@ import { getOpenOrderSystemPrompt } from '../prompts/open-orders-system-prompt.j
  * @returns {Object} Enriched context for Claude
  */
 export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol) {
-  const currentPrice = analyzerContext.lastPrice || analyzerContext.indicators?.[symbol]?.currentPrice || 0;
+  const currentPrice = analyzerContext.currentPrice || analyzerContext.indicators?.[symbol]?.currentPrice || 0;
   const indicators = analyzerContext.indicators?.[symbol] || {};
+
+  const createdAtRaw = openOrder.created_at || openOrder.createdAt || openOrder.timestamp || openOrder.created || null;
+  const createdAtMs = createdAtRaw ? new Date(createdAtRaw).getTime() : null;
+  const orderAgeMinutes = createdAtMs ? Math.max(0, Math.round((Date.now() - createdAtMs) / 60000)) : null;
 
   const orderContext = {
     symbol,
@@ -28,17 +32,25 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
     created_at: openOrder.created_at || new Date().toISOString(),
   };
 
-  const priceDiff = ((currentPrice - orderContext.price) / orderContext.price * 100).toFixed(2);
+  const priceDiff = orderContext.price
+    ? ((currentPrice - orderContext.price) / orderContext.price * 100)
+    : 0;
 
   const balances = analyzerContext.balances || {};
-  const usdBalance = parseFloat(
-    balances.find ? balances.find(b => b.currency === 'USD')?.total
-    : (balances.USD?.total ?? balances.USD ?? 0)
-  ) || 0;
+  const usdBalance = parseFloat(balances.fiat?.USD ?? 0) || 0;
+
+  const pair = (analyzerContext.pairs || []).find(p => (p.symbol || '').replace('/', '-') === symbol);
+  const bestBid = pair?.orderBookTop?.bestBid?.price ?? null;
+  const bestAsk = pair?.orderBookTop?.bestAsk?.price ?? null;
+  const spreadAbs = (bestBid && bestAsk) ? Number((bestAsk - bestBid).toFixed(4)) : null;
+  const spreadPct = (spreadAbs && bestBid) ? Number(((spreadAbs / bestBid) * 100).toFixed(3)) : null;
 
   return {
     open_order: orderContext,
-    price_diff_pct: parseFloat(priceDiff),
+    order_age_minutes: orderAgeMinutes,
+    price_diff_pct: parseFloat(priceDiff.toFixed(2)),
+    spread_abs: spreadAbs,
+    spread_pct: spreadPct,
     usd_available_for_buy: parseFloat(usdBalance.toFixed(2)),
     rendimiento_pct: analyzerContext.rendimiento ?? null,
     market_conditions: {
@@ -54,6 +66,8 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
       bb_lower: indicators.bbLower || null,
       bb_mid: indicators.bbMid || null,
       confluence: indicators.confluence || null,
+      spread_abs: spreadAbs,
+      spread_pct: spreadPct,
     },
     trading_history: analyzerContext.previousDecisions?.[symbol] || [],
     account_balance: analyzerContext.balances || {},
@@ -67,7 +81,7 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
  * @returns {string} JSON string message for Claude
  */
 export function buildOpenOrderAnalysisMessage(openOrderContext, symbol) {
-  const { open_order, price_diff_pct, market_conditions, trading_history } = openOrderContext;
+  const { open_order, price_diff_pct, market_conditions, trading_history, order_age_minutes, spread_abs, spread_pct } = openOrderContext;
 
   const historyText = trading_history.length > 0
     ? trading_history.map(d =>
@@ -85,10 +99,13 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol) {
       quantity: open_order.quantity,
       placed_at_price: open_order.price,
       status: open_order.status,
+      age_minutes: order_age_minutes,
     },
     market_state: {
       current_price: market_conditions.current_price,
       price_moved_pct: price_diff_pct,
+      spread_abs,
+      spread_pct,
       rsi_14: market_conditions.rsi_14,
       macd_line: market_conditions.macd_line,
       ema_20: market_conditions.ema_20,

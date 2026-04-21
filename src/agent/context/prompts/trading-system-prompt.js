@@ -18,6 +18,7 @@ You receive processed market data for one or more trading pairs:
 - previousDecisions: Recent historical context to avoid flip-flopping.
 - lastExecutedOrder: Full details of your previous executed order in this market.
 - rendimiento: The real-time unrealized Profit and Loss percentage relative to your last BUY entry price. Evaluate this to decide whether to Secure Profits or Cut Losses.
+- rendimientoAcumulado: Accumulated realized performance percentage from historical SELL trades (summary metric, not per-trade).
 
 Decide: BUY, SELL, or HOLD for each pair. Use the technical indicators and the "confluence" suggestion as a foundation, but apply your own judgment for confidence and final action. Calculate TP/SL levels.
 

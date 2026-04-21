@@ -6,9 +6,9 @@
 import { getTradingPerformance } from '../../utils/mongodb.js';
 import { logger } from '../../utils/logger.js';
 
-export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false, chatId = null) {
+export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false, chatId = null, priceMap = {}) {
   // Extract relevant balances
-  const relevantBalances = extractRelevantBalances(balances, indicators);
+  const relevantBalances = extractRelevantBalances(balances, indicators, priceMap);
 
   // Extract open orders array (handle both formats)
   const openOrdersArray = Array.isArray(openOrders?.data)
@@ -171,7 +171,7 @@ function calculateATR(candles, period = 14) {
   return parseFloat(atr.toFixed(4));
 }
 
-function extractRelevantBalances(balances, indicators = {}) {
+function extractRelevantBalances(balances, indicators = {}, priceMap = {}) {
   if (!balances) return {};
 
   const structured = {
@@ -200,7 +200,7 @@ function extractRelevantBalances(balances, indicators = {}) {
       if (b.currency === 'USD') totalUSD = fiatAmount;
     } else {
       const pairKey = Object.keys(indicators).find(k => k.startsWith(b.currency + '-'));
-      const currentPrice = pairKey ? indicators[pairKey].currentPrice : 0;
+      const currentPrice = pairKey ? indicators[pairKey].currentPrice : (priceMap[b.currency] || 0);
       const estimatedUsdValue = currentPrice ? parseFloat((total * currentPrice).toFixed(2)) : null;
 
       if (estimatedUsdValue !== null && estimatedUsdValue < 1) continue;

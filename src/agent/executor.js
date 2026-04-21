@@ -46,7 +46,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     }
 
     // ── 1. Fetch market data ───────────────────────────────────────
-    const { client, market, balances, balanceArray, openOrders, snapshot } = await fetchMarketData(coin, effectiveConfig);
+    const { client, market, balances, balanceArray, openOrders, snapshot, priceMap } = await fetchMarketData(coin, effectiveConfig);
 
     // ── 2. Compute indicators (EARLY - needed for open order analysis) ──
     const indicators = {};
@@ -128,7 +128,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
               confidence: d.confidence,
               price: d.currentPrice || null,
               reasoning: d.reasoning?.substring(0, 80),
-              currentPnlPct: d.currentPnlPct !== undefined ? d.currentPnlPct : null,
+              rendimiento: d.rendimiento !== undefined ? d.rendimiento : null,
             }));
           }
         } catch { /* non-critical */ }
@@ -142,17 +142,20 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       coin,
       snapshots,
       dbConnected,
-      chatId
+      chatId,
+      priceMap
     );
 
     // Merge previous decisions and rendimiento
     analyzerContext.previousDecisions = previousDecisionsBySymbol;
     analyzerContext.lastExecutedOrder = lastOrder;
     analyzerContext.rendimiento = rendimiento;
+    analyzerContext.rendimientoAcumulado = analyzerContext.tradingStats?.accumulatedRendimiento ?? null;
     // lastPrice = price at the time of the most recent previous decision for this coin
     const lastPrice = previousDecisionsBySymbol[snapshot.symbol]?.[0]?.price || lastOrder?.price || 0;
     const currentPrice = indicators[snapshot.symbol]?.currentPrice || 0;
     
+    analyzerContext.currentPrice = currentPrice;
     analyzerContext.lastPrice = lastPrice;
     analyzerContext.priceChangeSinceLastAnalysisPct = (lastPrice > 0 && currentPrice > 0)
       ? parseFloat(((currentPrice - lastPrice) / lastPrice * 100).toFixed(2))
@@ -160,7 +163,9 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     // ── 4.2 Check for open orders (with FULL context) ────────────────
     // openOrders already fetched from fetchMarketData
-    const coinBalance = balances?.[coin]?.available || 0;
+    const normalizedCoin = coin.replace('/', '-');
+    const baseCurrency = normalizedCoin.split('-')[0];
+    const coinBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
 
     // Ensure openOrders is an array
     const ordersArray = Array.isArray(openOrders) ? openOrders : [];
@@ -177,58 +182,62 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     const openOrdersOtherCoins = ordersArray.filter(order => {
       const orderSymbol = (order.symbol || '').replace('/', '-').toUpperCase();
-      const normalizedCoin = coin.replace('/', '-').toUpperCase();
-      return orderSymbol !== normalizedCoin;
+      const normalizedCoinUpper = normalizedCoin.toUpperCase();
+      return orderSymbol !== normalizedCoinUpper;
     });
 
     logger.info(`🔍 Open orders: ${openOrdersThisCoin.length} for ${coin}, ${openOrdersOtherCoins.length} for other coins`);
 
-    // Handle open orders ONLY if they exist
-    if (openOrdersThisCoin.length > 0 || openOrdersOtherCoins.length > 0) {
+    // Case 1: Orders for THIS coin (ANY balance) → Procesa with FULL context y RETORNA
+    if (openOrdersThisCoin.length > 0) {
+      logger.info(`📋 Processing ${openOrdersThisCoin.length} open order(s) for ${coin} with full context...`);
+      const processResult = await processOpenOrders(
+        coin,
+        openOrdersThisCoin,
+        analyzerContext,
+        client,
+        market,
+        dbConnected,
+        triggerReason,
+        chatId,
+        effectiveConfig
+      );
 
-      // Case 1: balance=0 + ONLY orders for OTHER coins → RETORNA sin procesar
-      if (coinBalance === 0 && openOrdersOtherCoins.length > 0 && openOrdersThisCoin.length === 0) {
-        logger.warn(`⚠️  Balance 0 for ${coin}. ${openOrdersOtherCoins.length} open order(s) for other coins blocking.`);
-        const otherCoinsList = [...new Set(openOrdersOtherCoins.map(o => o.symbol || 'unknown'))].join(', ');
-        await notify(`⚠️  *${coin}*: Balance 0. Open orders blocking for: ${otherCoinsList}. Pausing.`).catch(() => { });
+      if (processResult.status === 'error') {
+        await notify(`❌ *${coin}*: Open orders failed: ${processResult.error}`).catch(() => { });
         return {
           decision: null,
           execResults: [],
-          stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'zero_balance_other_orders' }
+          stats: { executedCount: 0, skippedCount: 1, errorCount: 1, reason: 'open_orders_error' }
         };
       }
 
-      // Case 2: Orders for THIS coin (ANY balance) → Procesa with FULL context y RETORNA
-      if (openOrdersThisCoin.length > 0) {
-        logger.info(`📋 Processing ${openOrdersThisCoin.length} open order(s) for ${coin} with full context...`);
-        const processResult = await processOpenOrders(coin, openOrdersThisCoin, analyzerContext, client, market, dbConnected, triggerReason, chatId);
-
-        logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
-        await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`).catch(() => { });
-        return {
-          decision: null,
-          execResults: [],
-          stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'open_orders_processed' }
-        };
-      }
+      logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
+      await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`).catch(() => { });
+      return {
+        decision: null,
+        execResults: [],
+        stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'open_orders_processed' }
+      };
     }
+
     // If NO open orders → continue normally (skip this section)
 
-    // ── 4.3 Guard: last order was SELL + insufficient USD to re-enter ──
-    // If the previous executed order was a SELL and we no longer have enough
-    // USD balance to place a new minimum order, there's nothing for Claude to do.
+    // ── 4.3 Guard: no funds and no position for this coin ───────────
     const minOrderUsd = effectiveConfig.trading.minOrderUsd;
     let availableMoney = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
     availableMoney += parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
+    const hasFundsToBuy = availableMoney >= minOrderUsd;
+    const hasCoinBalance = coinBalance > 0;
 
-    if (lastOrder?.side === 'sell' && availableMoney < minOrderUsd) {
-      const msg = `💤 *${coin}*: Último movimiento fue SELL y saldo USD ($${availableMoney.toFixed(2)}) está por debajo del mínimo ($${minOrderUsd}). Ciclo pausado hasta recargar fondos.`;
-      logger.info(`⏭️  Skipping Claude for ${coin}: post-SELL, USD balance $${availableMoney.toFixed(2)} < min $${minOrderUsd}`);
+    if (!hasFundsToBuy && !hasCoinBalance) {
+      const msg = `💤 *${coin}*: Sin fondos suficientes ($${availableMoney.toFixed(2)} < $${minOrderUsd}) y sin balance de ${baseCurrency}. Ciclo pausado.`;
+      logger.info(`⏭️  Skipping Claude for ${coin}: no funds and no ${baseCurrency} balance`);
       await notify(msg).catch(() => { });
       return {
         decision: null,
         execResults: [],
-        stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'insufficient_usd_after_sell' }
+        stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'no_funds_no_position' }
       };
     }
 

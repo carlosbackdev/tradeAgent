@@ -21,6 +21,7 @@ import cron from 'node-cron';
 import { logger } from './utils/logger.js';
 import {
   claimInvite,
+  claimInviteByCode,
   findUserByTelegramId,
   inviteUser,
   listUsers,
@@ -40,6 +41,7 @@ import { UserSession } from './users/user-session.js';
 
 const ADMIN_ID = process.env.ADMIN_TELEGRAM_ID;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME;
 const BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // Active user sessions: Map<telegramId, UserSession>
@@ -108,7 +110,17 @@ async function handleAdminCommand(chatId, text) {
     }
     const result = await inviteUser({ telegramUsername: username, invitedBy: String(chatId) });
     if (result.ok) {
-      await sendMessage(chatId, `✅ @${result.username} ha sido invitado. Cuando abra el bot podrá configurar su cuenta.`);
+        if (!BOT_USERNAME) {
+          await sendMessage(chatId, `✅ @${result.username} ha sido invitado. Configura TELEGRAM_BOT_USERNAME para generar el enlace de invitación.`);
+          return;
+        }
+
+        const inviteLink = `https://t.me/${BOT_USERNAME}?start=invite_${result.inviteCode}`;
+        await sendMessage(
+          chatId,
+          `✅ @${result.username} ha sido invitado.\n\n` +
+          `Pásale este enlace para activar su acceso:\n${inviteLink}`
+        );
     } else {
       await sendMessage(chatId, `⚠️ ${result.reason}`);
     }
@@ -250,6 +262,10 @@ async function routeUpdate(update) {
   const msgId = msg?.message_id || cb?.message?.message_id;
   const chatId = String(fromId);
 
+  const textTrimmed = (text || '').trim();
+  const startMatch = textTrimmed.match(/^\/start(?:\s+(.+))?$/i);
+  const startPayload = startMatch?.[1] || null;
+
   if (!fromId) return;
 
   // ── Identify user ────────────────────────────────────────────────
@@ -262,14 +278,20 @@ async function routeUpdate(update) {
     if (handled !== null) return;
   }
 
-  // Try to claim a pending invite
+  // Try to claim a pending invite by code (deep link)
+  if (!user && startPayload?.startsWith('invite_')) {
+    const inviteCode = startPayload.replace('invite_', '').trim();
+    user = await claimInviteByCode(chatId, inviteCode, fromUsername);
+  }
+
+  // Try to claim a pending invite by username (fallback)
   if (!user || user.status === 'pending_invite') {
     user = await claimInvite(chatId, fromUsername);
   }
 
   // Not invited at all
   if (!user) {
-    if (text === '/start') {
+    if (startMatch) {
       await sendMessage(chatId,
         `👋 Hola! Este bot es privado y solo está disponible por invitación.\n\n` +
         `Si tienes acceso, contacta con el administrador.`
@@ -286,7 +308,7 @@ async function routeUpdate(update) {
 
   // ── Pending setup — route to onboarding ─────────────────────────
   if (user.status === 'pending_setup' || user.status === 'pending_invite') {
-    if (text === '/start') {
+    if (startMatch) {
       await sendMessage(chatId, getWelcomeMessage(fromUsername), {
         reply_markup: {
           inline_keyboard: [[{ text: '▶️ Comenzar configuración', callback_data: 'onboarding_start' }]]

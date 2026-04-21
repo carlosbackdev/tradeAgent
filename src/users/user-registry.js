@@ -5,6 +5,7 @@
  */
 
 import { MongoClient } from 'mongodb';
+import crypto from 'crypto';
 import { logger } from '../utils/logger.js';
 
 let _db = null;
@@ -36,6 +37,10 @@ async function getDb() {
     { telegram_username: 1 },
     { unique: true, sparse: true }
   );
+  await _db.collection('users').createIndex(
+    { invite_code: 1 },
+    { unique: true, sparse: true }
+  );
   await _db.collection('users').createIndex({ status: 1 });
 
   return _db;
@@ -59,8 +64,11 @@ export async function inviteUser({ telegramUsername, invitedBy }) {
     return { ok: false, reason: `@${username} already exists (status: ${existing.status})` };
   }
 
+  const inviteCode = crypto.randomBytes(16).toString('hex');
+
   await col.insertOne({
     telegram_username: username,
+    invite_code: inviteCode,
     // telegram_id omitted intentionally — assigned when the user first messages the bot
     status: 'pending_invite',
     invited_by: invitedBy,
@@ -71,7 +79,7 @@ export async function inviteUser({ telegramUsername, invitedBy }) {
     updated_at: new Date(),
   });
 
-  return { ok: true, username };
+  return { ok: true, username, inviteCode };
 }
 
 export async function findUserByTelegramId(telegramId) {
@@ -115,6 +123,34 @@ export async function claimInvite(telegramId, telegramUsername) {
   }
 
   return null; // Not invited
+}
+
+export async function claimInviteByCode(telegramId, inviteCode, telegramUsername) {
+  const db = await getDb();
+  const col = db.collection('users');
+
+  const normalizedCode = (inviteCode || '').trim();
+  if (!normalizedCode) return null;
+
+  const user = await col.findOne({ invite_code: normalizedCode, status: 'pending_invite' });
+  if (!user) return null;
+
+  const normalizedUsername = (telegramUsername || user.telegram_username || '').replace('@', '').toLowerCase();
+
+  await col.updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        telegram_id: String(telegramId),
+        telegram_username: normalizedUsername,
+        status: 'pending_setup',
+        claimed_at: new Date(),
+        updated_at: new Date(),
+      }
+    }
+  );
+
+  return { ...user, telegram_id: String(telegramId), telegram_username: normalizedUsername, status: 'pending_setup' };
 }
 
 export async function updateUserConfig(telegramId, configPatch) {

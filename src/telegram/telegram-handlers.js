@@ -235,7 +235,7 @@ ${dry}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 
         const openPos = stats.openPositions?.length > 0
             ? '\n\n📂 <b>POSICIONES ABIERTAS</b>\n' + stats.openPositions.map(p =>
                 `  • ${p.symbol}: <code>${p.qty}</code> @ <code>$${p.avgPrice}</code> (coste <code>$${p.totalCost}</code>)`
-            ).join('\n')
+              ).join('\n')
             : '';
 
         const accumRend = stats.accumulatedRendimiento;
@@ -468,7 +468,17 @@ ${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
         });
 
         if (result.ok) {
-            await this.ctx.sendMessage(`✅ @${result.username} ha sido invitado.`);
+            const botUsername = process.env.TELEGRAM_BOT_USERNAME;
+            if (!botUsername) {
+                await this.ctx.sendMessage(`✅ @${result.username} ha sido invitado. Configura TELEGRAM_BOT_USERNAME para generar el enlace de invitación.`);
+                return;
+            }
+
+            const inviteLink = `https://t.me/${botUsername}?start=invite_${result.inviteCode}`;
+            await this.ctx.sendMessage(
+                `✅ @${result.username} ha sido invitado.\n\n` +
+                `Pásale este enlace para activar su acceso:\n${inviteLink}`
+            );
         } else {
             await this.ctx.sendMessage(`⚠️ ${result.reason}`);
         }

@@ -28,15 +28,29 @@ import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
  * @param {string} triggerReason - Why this cycle was triggered (for decision logging)
  * @returns {Promise<Object>} Processing result
  */
-export async function processOpenOrders(symbol, openOrdersThisCoin, analyzerContext, client, revolutAPI, dbConnected = false, triggerReason = 'open_order_analysis', chatId = null) {
+export async function processOpenOrders(
+  symbol,
+  openOrdersThisCoin,
+  analyzerContext,
+  client,
+  revolutAPI,
+  dbConnected = false,
+  triggerReason = 'open_order_analysis',
+  chatId = null,
+  effectiveConfig = null
+) {
   try {
-    const userConfig = analyzerContext.userConfig; // Assuming passed through context builder
-    const anthConfig = userConfig?.anthropic || config.anthropic;
-    const tradingConfig = userConfig?.trading || config.trading;
+    const anthConfig = effectiveConfig?.anthropic;
+    const tradingConfig = effectiveConfig?.trading;
+
+    if (!anthConfig || !tradingConfig) {
+      throw new Error('Missing effectiveConfig for open order analysis');
+    }
 
     logger.info(`⏳ Processing ${openOrdersThisCoin.length} open order(s) for ${symbol} with user ${chatId || 'single_user'}...`);
 
     const results = {
+      status: 'ok',
       symbol,
       found: openOrdersThisCoin.length,
       cancelled: 0,
@@ -129,18 +143,25 @@ export async function processOpenOrders(symbol, openOrdersThisCoin, analyzerCont
               // Save executed order (like executor does after executeDecisions)
               if (dbConnected && newOrder.id) {
                 try {
+                  const execPrice = newOrder.price || analyzerContext.lastPrice || null;
+                  const usdAmount = execPrice ? Number(buyQuantity) * Number(execPrice) : null;
                   await saveOrder({
+                    decisionId,
                     symbol,
-                    order_id: newOrder.id,
                     side: 'buy',
-                    quantity: buyQuantity,
-                    price: newOrder.price || analyzerContext.lastPrice || 0,
-                    state: 'executed',
-                    decision_id: decisionId,
-                    parent_open_order_id: orderId,
-                    triggered_by: 'open_order_buy_more',
-                    executed_at: new Date().toISOString(),
-                    chatId
+                    orderType: 'market',
+                    qty: buyQuantity,
+                    price: execPrice,
+                    positionPct: null,
+                    usdAmount,
+                    revolutOrderId: newOrder.id,
+                    takeProfit: null,
+                    stopLoss: null,
+                    riskRewardRatio: null,
+                    status: 'executed',
+                    error: null,
+                    rendimiento: null,
+                    chatId,
                   });
                 } catch (err) {
                   logger.warn(`⚠️ Failed to save executed BUY order: ${err.message}`);
