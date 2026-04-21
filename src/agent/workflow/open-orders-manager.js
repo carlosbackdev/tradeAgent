@@ -28,9 +28,13 @@ import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
  * @param {string} triggerReason - Why this cycle was triggered (for decision logging)
  * @returns {Promise<Object>} Processing result
  */
-export async function processOpenOrders(symbol, openOrdersThisCoin, analyzerContext, client, revolutAPI, dbConnected = false, triggerReason = 'open_order_analysis') {
+export async function processOpenOrders(symbol, openOrdersThisCoin, analyzerContext, client, revolutAPI, dbConnected = false, triggerReason = 'open_order_analysis', chatId = null) {
   try {
-    logger.info(`⏳ Processing ${openOrdersThisCoin.length} open order(s) for ${symbol} with full context...`);
+    const userConfig = analyzerContext.userConfig; // Assuming passed through context builder
+    const anthConfig = userConfig?.anthropic || config.anthropic;
+    const tradingConfig = userConfig?.trading || config.trading;
+
+    logger.info(`⏳ Processing ${openOrdersThisCoin.length} open order(s) for ${symbol} with user ${chatId || 'single_user'}...`);
 
     const results = {
       symbol,
@@ -47,7 +51,14 @@ export async function processOpenOrders(symbol, openOrdersThisCoin, analyzerCont
     for (const order of openOrdersThisCoin) {
       try {
         // Step 1: Get Claude decision
-        const analysis = await analyzeOpenOrderWithClaude(order, analyzerContext, symbol);
+        const analysis = await analyzeOpenOrderWithClaude(
+          order, 
+          analyzerContext, 
+          symbol, 
+          anthConfig.apiKey, 
+          anthConfig.model, 
+          tradingConfig
+        );
         const orderId = order.id || order.order_id;
 
         // Step 2: Save decision to MongoDB (like executor step 6)
@@ -68,7 +79,7 @@ export async function processOpenOrders(symbol, openOrdersThisCoin, analyzerCont
               open_order_action: analysis.action,
             };
 
-            const saved = await saveDecision(decisionPayload, triggerReason);
+            const saved = await saveDecision(decisionPayload, triggerReason, chatId);
             decisionId = saved?._id;
             logger.debug(`💾 Saved decision for open order ${orderId}`);
           } catch (err) {
@@ -129,6 +140,7 @@ export async function processOpenOrders(symbol, openOrdersThisCoin, analyzerCont
                     parent_open_order_id: orderId,
                     triggered_by: 'open_order_buy_more',
                     executed_at: new Date().toISOString(),
+                    chatId
                   });
                 } catch (err) {
                   logger.warn(`⚠️ Failed to save executed BUY order: ${err.message}`);

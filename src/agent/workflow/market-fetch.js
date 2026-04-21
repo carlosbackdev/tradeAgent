@@ -24,7 +24,7 @@ export async function fetchMarketData(coin, config) {
   });
 
   const balanceArray = Array.isArray(balances) ? balances : (balances?.data || []);
-  
+
   // Ensure openOrders is always an array
   let ordersArray = [];
   if (Array.isArray(openOrders)) {
@@ -36,7 +36,7 @@ export async function fetchMarketData(coin, config) {
   } else {
     logger.warn(`⚠️ Unexpected openOrders format: ${typeof openOrders}. Expected array or object with .data or .orders`);
   }
-  
+
   const eurBalance = parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
   const usdBalance = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
   const totalFiat = eurBalance + usdBalance;

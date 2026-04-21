@@ -12,7 +12,11 @@ export class TelegramCommands {
         const args = argParts.join(' ');
         const command = cmd.toLowerCase();
 
-        if (this.handlers.isConfiguring && !command.startsWith('/')) {
+        const isAdmin = this.handlers.ctx?.isAdmin;
+
+        // ── Si el bot está esperando una respuesta del usuario (config, invitación, pregunta) ──
+        const state = this.handlers.configState;
+        if (state?.isInviting || state?.isConfiguring || state?.mode) {
             await this.handlers.handleConfigInput(full);
             return;
         }
@@ -21,7 +25,7 @@ export class TelegramCommands {
             case '/start': await this.handlers.handleStart(); break;
             case '/help': await this.handlers.handleHelp(); break;
             case '/status': await this.handlers.handleStatus(); break;
-            case '/trigger': await this.handlers.handleHelp(); break;
+            case '/trigger': await this.handlers.handleHelp(); break; // Note: Original bot uses trigger via menu but this allows cmd
             case '/configuration': await this.handlers.handleConfiguration(); break;
             case '/cron': await this.handlers.handleCron(args); break;
             case '/cron_on': await this.handlers.handleCron('on'); break;
@@ -42,6 +46,25 @@ export class TelegramCommands {
             case '/venice': await this.handlers.handleCoinCommand('VENICE'); break;
             case '/xrp': await this.handlers.handleCoinCommand('XRP'); break;
             case '/stats': await this.handlers.handleTradingStats(); break;
+            
+            // Admin commands
+            case '/invite': 
+                if (isAdmin) await this.handlers.handleInvite(args); 
+                else await this.sendMessage('❓ Comando reservado para el administrador.');
+                break;
+            case '/users':
+                if (isAdmin) await this.handlers.handleListUsers();
+                else await this.sendMessage('❓ Comando reservado para el administrador.');
+                break;
+            case '/revoke':
+                if (isAdmin) await this.handlers.handleRevokeUser(args);
+                else await this.sendMessage('❓ Comando reservado para el administrador.');
+                break;
+            case '/admin_status':
+                if (isAdmin) await this.handlers.handleAdminStatus();
+                else await this.sendMessage('❓ Comando reservado para el administrador.');
+                break;
+
             default:
                 await this.sendMessage('❓ Comando no reconocido. Usa /help');
         }

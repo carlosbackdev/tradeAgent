@@ -8,13 +8,29 @@ import { notifyOrderExecuted, notifyError } from '../../telegram/handles.js';
 import { saveOrder } from '../../utils/mongodb.js';
 import { logger } from '../../utils/logger.js';
 
-export async function executeDecisions(decisions, coin, balanceArray, indicators, lastOrder, config, rendimiento = null, dbConnected = false) {
+// ── Position-sizing helpers ────────────────────────────────────────
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getAvailableUsd(balanceArray) {
+  return parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
+}
+
+function getAvailableCoin(balanceArray, symbol) {
+  // symbol might be 'BTC-USD' or 'BTC/USD'
+  const baseCurrency = symbol.replace('/', '-').split('-')[0];
+  return parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
+}
+
+export async function executeDecisions(decisions, coin, balanceArray, indicators, lastOrder, config, rendimiento = null, dbConnected = false, chatId = null) {
   const execResults = [];
   let executedCount = 0, skippedCount = 0, errorCount = 0;
 
   // Initialize OrderManager for placing orders
   const { RevolutClient } = await import('../../revolut/client.js');
-  const client = new RevolutClient();
+  const client = new RevolutClient(config);
   const orders = new OrderManager(client);
 
   for (const d of decisions) {
@@ -33,46 +49,57 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
       continue;
     }
 
-    let usd = parseFloat(d.usdAmount);
+    let usd = null;
+    const rawPositionPct = Number(d.positionPct ?? 0);
+    const positionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
+      ? clamp(rawPositionPct, 0, config.trading.maxTradeSize)
+      : 0;
 
-    // Auto-fill SELL orders if amount is missing/0
-    if (d.action === 'SELL' && (isNaN(usd) || usd === 0)) {
-      const baseCurrency = d.symbol.split('-')[0];
-      const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
-      const normalizedSymbol = d.symbol.replace('/', '-');
-      const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-      // 99.5% buffer for SELL auto-fills
-      usd = parseFloat((baseBalance * currentPrice * 0.995).toFixed(2));
-      d.usdAmount = usd;
-      logger.info(`💱 SELL auto-fill: ${baseBalance} ${baseCurrency} @ $${currentPrice} ≈ $${d.usdAmount} (99.5% buffer)`);
-    }
-
-    // ── Safety Buffers to avoid Revolut "Insufficient Balance" errors ──
-
-    if (d.action === 'BUY') {
-      const usdBalance = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
-      const maxAllowedBuy = parseFloat((usdBalance * 0.995).toFixed(2)); // Keep 0.5% for fees/slippage
-      if (usd > maxAllowedBuy) {
-        logger.info(`🛡️ BUY amount capped: $${usd} → $${maxAllowedBuy} (99.5% of balance to cover fees)`);
-        usd = maxAllowedBuy;
-        d.usdAmount = usd;
+    if (positionPct > 0) {
+      // ── positionPct mode (new) ──────────────────────────────
+      if (d.action === 'BUY') {
+        const usdBalance = getAvailableUsd(balanceArray);
+        usd = usdBalance * positionPct;
+        logger.info(`📐 BUY positionPct=${(positionPct * 100).toFixed(0)}% of $${usdBalance.toFixed(2)} USD → $${usd.toFixed(2)}`);
       }
-    }
 
-    if (d.action === 'SELL') {
-      const baseCurrency = d.symbol.split('-')[0];
-      const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
-      const normalizedSymbol = d.symbol.replace('/', '-');
-      const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-      if (currentPrice > 0 && baseBalance > 0) {
-        const maxSellUsd = parseFloat((baseBalance * currentPrice * 0.995).toFixed(2)); // 99.5% for sell
-        if (usd > maxSellUsd) {
-          logger.info(`🛡️ SELL amount capped: $${usd} → $${maxSellUsd} (99.5% for safety)`);
-          usd = maxSellUsd;
-          d.usdAmount = usd;
+      if (d.action === 'SELL') {
+        const normalizedSymbol = d.symbol.replace('/', '-');
+        const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
+        const coinBalance = getAvailableCoin(balanceArray, d.symbol);
+
+        if (currentPrice <= 0) {
+          execResults.push({ ...d, rendimiento, status: 'error', error: `No current price for ${d.symbol}` });
+          errorCount++;
+          logger.error(`❌ No current price for ${d.symbol}, skipping SELL`);
+          continue;
         }
+
+        const qtyToSell = coinBalance * positionPct;
+        usd = qtyToSell * currentPrice;
+        logger.info(`📐 SELL positionPct=${(positionPct * 100).toFixed(0)}% of ${coinBalance.toFixed(6)} ${d.symbol.split('-')[0]} → $${usd.toFixed(2)}`);
+      }
+    } else {
+      // ── Legacy usdAmount mode (backward compat) ────────────
+      usd = parseFloat(d.usdAmount);
+      logger.info(`💡 Legacy usdAmount mode: $${usd} for ${d.symbol}`);
+
+      // Legacy SELL auto-fill if amount is missing
+      if (d.action === 'SELL' && (isNaN(usd) || usd === 0)) {
+        const baseCurrency = d.symbol.split('-')[0];
+        const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
+        const normalizedSymbol = d.symbol.replace('/', '-');
+        const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
+        usd = parseFloat((baseBalance * currentPrice).toFixed(2));
+        logger.info(`💱 SELL auto-fill (legacy): ${baseBalance} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`);
       }
     }
+
+    // Store calculated positionPct back on decision for auditing
+    d.positionPct = positionPct;
+
+    usd = parseFloat((usd || 0).toFixed(2));
+    d.usdAmount = usd;
 
     const minOrder = config.trading.minOrderUsd;
     if (isNaN(usd) || usd < minOrder) {
@@ -147,6 +174,7 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
             orderType: d.orderType || 'market',
             qty: orderResult.qty || '',
             price: currentPrice,
+            positionPct: d.positionPct || 0,
             usdAmount: usd,
             revolutOrderId: orderResult.venue_order_id || orderResult.orderId || '',
             takeProfit: d.takeProfit || null,
@@ -154,6 +182,7 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
             riskRewardRatio: rrMetrics?.riskRewardRatio || null,
             status: 'executed',
             rendimiento: orderRendimiento,
+            chatId
           });
         } catch (err) {
           logger.warn(`⚠️  Failed to save order: ${err.message}`);

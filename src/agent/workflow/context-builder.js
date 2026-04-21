@@ -6,7 +6,7 @@
 import { getTradingPerformance } from '../../utils/mongodb.js';
 import { logger } from '../../utils/logger.js';
 
-export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false) {
+export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false, chatId = null) {
   // Extract relevant balances
   const relevantBalances = extractRelevantBalances(balances, indicators);
 
@@ -121,7 +121,7 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
   });
 
   // Build trading stats
-  const tradingStats = dbConnected ? await getTradingPerformance() : null;
+  const tradingStats = dbConnected ? await getTradingPerformance(chatId) : null;
 
   const tradingStatsForClaude = tradingStats ? {
     winRate: tradingStats.winRate,

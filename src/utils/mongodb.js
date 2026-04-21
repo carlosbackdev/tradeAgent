@@ -264,17 +264,21 @@ export async function getExecutedOrders(limit = 5, filter = {}) {
  * Get trading statistics — counts from decisions + orders collections
  * @returns {Object|null}
  */
-export async function getTradingStats() {
+export async function getTradingStats(chatId = null) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
   const decisionsCollection = db.collection('decisions');
 
+  const query = {};
+  if (chatId) query.chat_id = String(chatId);
+  else query.chat_id = 'single_user';
+
   try {
     const [totalOrders, totalDecisions, totalBuys, totalSells] = await Promise.all([
-      ordersCollection.countDocuments({ status: 'executed' }),
-      decisionsCollection.countDocuments(),
-      ordersCollection.countDocuments({ side: 'buy', status: 'executed' }),
-      ordersCollection.countDocuments({ side: 'sell', status: 'executed' }),
+      ordersCollection.countDocuments({ ...query, status: 'executed' }),
+      decisionsCollection.countDocuments(query),
+      ordersCollection.countDocuments({ ...query, side: 'buy', status: 'executed' }),
+      ordersCollection.countDocuments({ ...query, side: 'sell', status: 'executed' }),
     ]);
 
     return {
@@ -299,22 +303,26 @@ export async function getTradingStats() {
  * Also includes decision/order counts from getTradingStats.
  * @returns {Object|null}
  */
-export async function getTradingPerformance() {
+export async function getTradingPerformance(chatId = null) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
   const decisionsCollection = db.collection('decisions');
+
+  const query = {};
+  if (chatId) query.chat_id = String(chatId);
+  else query.chat_id = 'single_user';
 
   try {
     // Parallel: fetch all executed orders + decision count
     const [orders, totalDecisions, sellOrdersWithRendimiento] = await Promise.all([
       ordersCollection
-        .find({ status: 'executed', price: { $ne: null }, qty: { $ne: null } })
+        .find({ ...query, status: 'executed', price: { $ne: null }, qty: { $ne: null } })
         .sort({ created_at: 1 })
         .toArray(),
-      decisionsCollection.countDocuments(),
+      decisionsCollection.countDocuments(query),
       // Sum rendimiento stored on SELL orders (realized PnL% per trade, can be negative)
       ordersCollection
-        .find({ side: 'sell', status: 'executed', rendimiento: { $ne: null, $type: 'double' } })
+        .find({ ...query, side: 'sell', status: 'executed', rendimiento: { $ne: null, $type: 'double' } })
         .project({ rendimiento: 1 })
         .toArray(),
     ]);
@@ -436,17 +444,21 @@ export async function getTradingPerformance() {
  * Returns a float (can be negative) or 0 if no data.
  * @returns {number}
  */
-export async function getAccumulatedRendimiento() {
+export async function getAccumulatedRendimiento(chatId = null) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
 
+  const query = {
+    side: 'sell',
+    status: 'executed',
+    rendimiento: { $ne: null, $type: 'double' }
+  };
+  if (chatId) query.chat_id = String(chatId);
+  else query.chat_id = 'single_user';
+
   try {
     const sellOrders = await ordersCollection
-      .find({
-        side: 'sell',
-        status: 'executed',
-        rendimiento: { $ne: null, $type: 'double' }
-      })
+      .find(query)
       .project({ rendimiento: 1 })
       .toArray();
 
@@ -490,12 +502,12 @@ export async function getDecisionById(id) {
   try {
     const db = await connectDB();
     const decisionsCollection = db.collection('decisions');
-    
+
     // Dynamic import to avoid circular dependencies or top-level issues if needed,
     // though here we just need it for the constructor.
     const { ObjectId } = await import('mongodb');
     const queryId = (typeof id === 'string') ? new ObjectId(id) : id;
-    
+
     return await decisionsCollection.findOne({ _id: queryId });
   } catch (err) {
     logger.warn(`⚠️ Failed to get decision by ID ${id}: ${err.message}`);

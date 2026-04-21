@@ -26,9 +26,12 @@ import { buildAnalyzerContext } from './workflow/context-builder.js';
 import { executeDecisions } from './workflow/order-executor.js';
 import { processOpenOrders } from './workflow/open-orders-manager.js';
 
-export async function runAgentCycle(triggerReason = 'cron', coin, question = '') {
+export async function runAgentCycle(triggerReason = 'cron', coin, question = '', userConfig = null) {
   const startTime = Date.now();
-  logger.info(`🤖 Agent cycle started (trigger: ${triggerReason}, coin: ${coin})`);
+  const chatId = userConfig?.chatId || 'single_user';
+  const effectiveConfig = userConfig || config;
+
+  logger.info(`🤖 Agent cycle started (trigger: ${triggerReason}, coin: ${coin}, user: ${chatId})`);
 
   let dbConnected = false;
 
@@ -43,7 +46,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     }
 
     // ── 1. Fetch market data ───────────────────────────────────────
-    const { client, market, balances, balanceArray, openOrders, snapshot } = await fetchMarketData(coin, config);
+    const { client, market, balances, balanceArray, openOrders, snapshot } = await fetchMarketData(coin, effectiveConfig);
 
     // ── 2. Compute indicators (EARLY - needed for open order analysis) ──
     const indicators = {};
@@ -77,7 +80,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     if (dbConnected) {
       try {
         const querySymbol = { $in: [snapshot.symbol, snapshot.symbol.replace('-', '/')] };
-        const orders = await getExecutedOrders(1, { symbol: querySymbol, status: 'executed' });
+        const orders = await getExecutedOrders(1, { symbol: querySymbol, status: 'executed', chat_id: chatId });
         if (orders.length > 0) {
           lastOrder = orders[0];
 
@@ -107,7 +110,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       indicators[snapshot.symbol],
       coin,
       balanceArray,
-      config,
+      effectiveConfig,
       dbConnected
     );
     rendimiento = calculatedRendimiento;
@@ -117,7 +120,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     if (dbConnected) {
       for (const snap of snapshots) {
         try {
-          const prev = await getPreviousDecisions(snap.symbol, 3);
+          const prev = await getPreviousDecisions(snap.symbol, chatId, 3);
           if (prev.length > 0) {
             previousDecisionsBySymbol[snap.symbol] = prev.map(d => ({
               timestamp: d.created_at.toISOString(),
@@ -137,7 +140,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       indicators,
       coin,
       snapshots,
-      dbConnected
+      dbConnected,
+      chatId
     );
 
     // Merge previous decisions and rendimiento
@@ -149,13 +153,13 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     // ── 4.2 Check for open orders (with FULL context) ────────────────
     // openOrders already fetched from fetchMarketData
     const coinBalance = balances?.[coin]?.available || 0;
-    
+
     // Ensure openOrders is an array
     const ordersArray = Array.isArray(openOrders) ? openOrders : [];
     if (!Array.isArray(openOrders)) {
       logger.warn(`⚠️ openOrders is not an array: ${typeof openOrders}. Treating as empty.`);
     }
-    
+
     // Filter open orders: THIS coin vs OTHER coins
     const openOrdersThisCoin = ordersArray.filter(order => {
       const orderSymbol = (order.symbol || '').replace('/', '-').toUpperCase();
@@ -173,26 +177,26 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
 
     // Handle open orders ONLY if they exist
     if (openOrdersThisCoin.length > 0 || openOrdersOtherCoins.length > 0) {
-      
+
       // Case 1: balance=0 + ONLY orders for OTHER coins → RETORNA sin procesar
       if (coinBalance === 0 && openOrdersOtherCoins.length > 0 && openOrdersThisCoin.length === 0) {
         logger.warn(`⚠️  Balance 0 for ${coin}. ${openOrdersOtherCoins.length} open order(s) for other coins blocking.`);
         const otherCoinsList = [...new Set(openOrdersOtherCoins.map(o => o.symbol || 'unknown'))].join(', ');
-        await notify(`⚠️  *${coin}*: Balance 0. Open orders blocking for: ${otherCoinsList}. Pausing.`).catch(() => {});
+        await notify(`⚠️  *${coin}*: Balance 0. Open orders blocking for: ${otherCoinsList}. Pausing.`).catch(() => { });
         return {
           decision: null,
           execResults: [],
           stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'zero_balance_other_orders' }
         };
       }
-      
+
       // Case 2: Orders for THIS coin (ANY balance) → Procesa with FULL context y RETORNA
       if (openOrdersThisCoin.length > 0) {
         logger.info(`📋 Processing ${openOrdersThisCoin.length} open order(s) for ${coin} with full context...`);
-        const processResult = await processOpenOrders(coin, openOrdersThisCoin, analyzerContext, client, market, dbConnected, triggerReason);
-        
+        const processResult = await processOpenOrders(coin, openOrdersThisCoin, analyzerContext, client, market, dbConnected, triggerReason, chatId);
+
         logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
-        await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`).catch(() => {});
+        await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`).catch(() => { });
         return {
           decision: null,
           execResults: [],
@@ -201,6 +205,24 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       }
     }
     // If NO open orders → continue normally (skip this section)
+
+    // ── 4.3 Guard: last order was SELL + insufficient USD to re-enter ──
+    // If the previous executed order was a SELL and we no longer have enough
+    // USD balance to place a new minimum order, there's nothing for Claude to do.
+    const minOrderUsd = effectiveConfig.trading.minOrderUsd;
+    let availableMoney = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
+    availableMoney += parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
+
+    if (lastOrder?.side === 'sell' && availableMoney < minOrderUsd) {
+      const msg = `💤 *${coin}*: Último movimiento fue SELL y saldo USD ($${availableMoney.toFixed(2)}) está por debajo del mínimo ($${minOrderUsd}). Ciclo pausado hasta recargar fondos.`;
+      logger.info(`⏭️  Skipping Claude for ${coin}: post-SELL, USD balance $${availableMoney.toFixed(2)} < min $${minOrderUsd}`);
+      await notify(msg).catch(() => { });
+      return {
+        decision: null,
+        execResults: [],
+        stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'insufficient_usd_after_sell' }
+      };
+    }
 
     logger.info('Analyzer context:', JSON.stringify(analyzerContext, null, 2));
     logger.info('Forced decision:', JSON.stringify(forcedDecision, null, 2));
@@ -212,7 +234,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       logger.info(`⚡ Bypassing Claude. Forced decision: ${forcedDecision.reasoning}`);
     } else {
       try {
-        decision = await callAgentAnalyzer(analyzerContext, question);
+        const anthConfig = effectiveConfig.anthropic;
+        decision = await callAgentAnalyzer(analyzerContext, question, anthConfig.apiKey, anthConfig.model, effectiveConfig.trading);
         logger.info('✅ Claude decision received');
         logger.debug('Decision:', JSON.stringify(decision, null, 2));
       } catch (err) {
@@ -235,12 +258,13 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
             confidence: d.confidence,
             reasoning: d.reasoning || '',
             risks: d.risks || '',
+            positionPct: parseFloat(d.positionPct) || 0,
             usdAmount: parseFloat(d.usdAmount) || 0,
             orderType: d.orderType || 'market',
             takeProfit: d.takeProfit || null,
             stopLoss: d.stopLoss || null,
             rendimiento: rendimiento !== null ? rendimiento : null,
-          }, triggerReason);
+          }, triggerReason, chatId);
 
           d.mongoDecisionId = saved?._id;
         } catch (err) {
@@ -257,9 +281,10 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
       balanceArray,
       indicators,
       lastOrder,
-      config,
+      effectiveConfig,
       rendimiento,
-      dbConnected
+      dbConnected,
+      chatId
     );
 
     // ── 8. Notify via Telegram ─────────────────────────────────────
@@ -275,7 +300,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '')
     // ── 9. Save portfolio snapshot ─────────────────────────────────
     if (dbConnected && balances) {
       try {
-        await savePortfolioSnapshot(balances);
+        await savePortfolioSnapshot(balances, chatId);
       } catch (err) {
         logger.warn(`⚠️  Failed to save portfolio snapshot: ${err.message}`);
       }

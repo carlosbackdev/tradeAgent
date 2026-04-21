@@ -4,7 +4,7 @@
  * Follows the same pattern as buildAnalyzerMessage for consistency
  */
 
-import { getOpenOrderSystemPrompt } from './prompts/open-orders-system-prompt.js';
+import { getOpenOrderSystemPrompt } from '../prompts/open-orders-system-prompt.js';
 
 /**
  * Build enriched analysis context for open order
@@ -30,9 +30,17 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
 
   const priceDiff = ((currentPrice - orderContext.price) / orderContext.price * 100).toFixed(2);
 
+  const balances = analyzerContext.balances || {};
+  const usdBalance = parseFloat(
+    balances.find ? balances.find(b => b.currency === 'USD')?.total
+    : (balances.USD?.total ?? balances.USD ?? 0)
+  ) || 0;
+
   return {
     open_order: orderContext,
     price_diff_pct: parseFloat(priceDiff),
+    usd_available_for_buy: parseFloat(usdBalance.toFixed(2)),
+    rendimiento_pct: analyzerContext.rendimiento ?? null,
     market_conditions: {
       current_price: currentPrice,
       rsi_14: indicators.rsi14 || null,
@@ -42,6 +50,10 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
       ema_20: indicators.ema20 || null,
       ema_50: indicators.ema50 || null,
       sma_200: indicators.sma200 || null,
+      bb_upper: indicators.bbUpper || null,
+      bb_lower: indicators.bbLower || null,
+      bb_mid: indicators.bbMid || null,
+      confluence: indicators.confluence || null,
     },
     trading_history: analyzerContext.previousDecisions?.[symbol] || [],
     account_balance: analyzerContext.balances || {},
@@ -58,9 +70,9 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol) {
   const { open_order, price_diff_pct, market_conditions, trading_history } = openOrderContext;
 
   const historyText = trading_history.length > 0
-    ? trading_history.map(d => 
-        `- ${d.action.toUpperCase()}: ${d.confidence}% confidence - "${d.reasoning}"`
-      ).join('\n')
+    ? trading_history.map(d =>
+      `- ${d.action.toUpperCase()}: ${d.confidence}% confidence - "${d.reasoning}"`
+    ).join('\n')
     : '- No previous decisions';
 
   const analysisData = {
@@ -81,9 +93,16 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol) {
       macd_line: market_conditions.macd_line,
       ema_20: market_conditions.ema_20,
       ema_50: market_conditions.ema_50,
+      bb_upper: market_conditions.bb_upper,
+      bb_lower: market_conditions.bb_lower,
+      confluence: market_conditions.confluence,
+    },
+    position_info: {
+      rendimiento_pct: openOrderContext.rendimiento_pct,
+      usd_available_for_buy: openOrderContext.usd_available_for_buy,
     },
     previous_decisions_for_symbol: historyText,
-    your_task: 'Decide: keep, cancel, or buy_more? Include confidence 0-100.',
+    your_task: 'Decide: keep, cancel, or buy_more? Use positionPct (0-1) for buy_more sizing.',
   };
 
   return JSON.stringify(analysisData, null, 2);

@@ -27,7 +27,7 @@ function chunk(arr, size) {
 export class TelegramHandlers {
     constructor(botContext) {
         this.ctx = botContext;
-        this.configState = { isConfiguring: false, selectedKey: null };
+        this.configState = { isConfiguring: false, isInviting: false, selectedKey: null };
     }
 
     get isConfiguring() {
@@ -60,18 +60,23 @@ export class TelegramHandlers {
             ]
         };
 
-        const dry = config.debug.dryRun ? '🔒 DRY_RUN' : '🔴 LIVE TRADING';
+        if (this.ctx.isAdmin) {
+            initKeyboard.inline_keyboard.push([{ text: '👑 ADMIN PANEL', callback_data: '/admin' }]);
+        }
+
+        const uConfig = this.ctx.readEnvFile();
+        const dry = uConfig.debug.dryRun ? '🔒 DRY_RUN' : '🔴 LIVE TRADING';
 
         await this.ctx.sendMessage(
-            `🤖 Revolut x Trading Agent inicializado\n\n` +
+            `🤖 <b>Revolut x Trading Agent inicializado</b>\n\n` +
             `Agente de trading automatizado con IA para Revolut X\n\n` +
             `Analiza el mercado, evalua las probabilidades, ` +
             `Analiza tu cartera y tus operaciones, todo en contexto y con indicadores para ejecutar la mejor decisión.\n\n` +
             `Las Operaciones se ejecutan automaticamente en Revolut segun la decision tomada por el Agente.\n\n` +
-            `⚙️ Estado del sistema:\n` +
+            `⚙️ <b>Estado del sistema:</b>\n` +
             `⏰ Cron: ${cronSt.enabled ? `✅ <code>${CronParse(cronSt.schedule)}</code>` : '⏸ desactivado'}\n` +
             `💰 Modo: ${dry}\n\n`,
-            initKeyboard
+            { parse_mode: 'HTML', reply_markup: initKeyboard }
         );
     }
     async handleMenu() {
@@ -99,7 +104,11 @@ export class TelegramHandlers {
             ]
         };
 
-        await this.ctx.sendMessage('🤖 Acciones disponibles:', initKeyboard);
+        if (this.ctx.isAdmin) {
+            initKeyboard.inline_keyboard.push([{ text: '👑 ADMIN PANEL', callback_data: '/admin' }]);
+        }
+
+        await this.ctx.sendMessage('🤖 Acciones disponibles:', { reply_markup: initKeyboard });
     }
 
     async handleAsk() {
@@ -111,8 +120,8 @@ export class TelegramHandlers {
         inline_keyboard.push([{ text: '🔙 ATRÁS', callback_data: '/init' }]);
 
         await this.ctx.sendMessage(
-            '💬 *PREGUNTA AL AGENTE*\n\nSelecciona una moneda para analizar con tu pregunta:',
-            { parse_mode: 'Markdown', inline_keyboard }
+            '💬 <b>PREGUNTA AL AGENTE</b>\n\nSelecciona una moneda para analizar con tu pregunta:',
+            { parse_mode: 'HTML', reply_markup: { inline_keyboard } }
         );
     }
 
@@ -131,81 +140,101 @@ export class TelegramHandlers {
             ],
         };
 
-        await this.ctx.sendMessage(`🤖 REVOLUT X TRADING AGENT
+        await this.ctx.sendMessage(`🤖 <b>REVOLUT X TRADING AGENT</b>
 
 ✅ Selecciona una crypto para analizar y operar, El agente analizara la situacion actual y tomara la mejor decisión.
 
 ⏰ Para programar analisis y operaciones automaticas, pulsa en el boton CRON (se realiza sobre cada una de nuestra lista
 de cryptomonedas).
 `
-            , keyboardCoins);
+            , { parse_mode: 'HTML', reply_markup: keyboardCoins });
     }
 
     async handleHelp() {
-        await this.ctx.sendMessage(`❓ COMANDOS DISPONIBLES
+        let helpText = '<b>❓ GUÍA DE COMANDOS</b>\n\n' +
+            '<b>⚡ ANÁLISIS MANUAL</b>\n' +
+            'Pulsa para analizar ahora:\n' +
+            '/btc · /eth · /sol · /venice · /xrp\n\n' +
+            '<b>⏰ CRON AUTOMÁTICO</b>\n' +
+            '/cron — Gestión de ciclos automáticos\n' +
+            '/cron_on — Activar bot\n' +
+            '/cron_off — Desactivar bot\n\n' +
+            '<b>ℹ️ INFORMACIÓN</b>\n' +
+            '/status — Configuración actual\n' +
+            '/help — Esta guía';
 
-Análisis manual:
-/btc — Bitcoin
-/eth — Ethereum
-/sol — Solana
-/venice — Venice Token
-/xrp — Ripple
+        if (this.ctx.isAdmin) {
+            helpText += '\n\n<b>👑 ADMINISTRACIÓN</b>\n' +
+                '• <code>/invite @user</code> — Invitar\n' +
+                '• <code>/users</code> — Lista de usuarios\n' +
+                '• <code>/admin_status</code> — Salud del bot';
+        }
 
-Cron automático:
-/cron — ver estado y opciones
-/cron_on — activar
-/cron_off — desactivar
-/cron_*/5 * * * *>  → cada 5 min
-/cron_*/15 * * * *> → cada 15 min
-/cron_0 * * * *>    → cada hora
-/cron_0 */4 * * *>  → cada 4 horas
+        await this.ctx.sendMessage(helpText, { 
+            parse_mode: 'HTML',
+            reply_markup: { 
+                inline_keyboard: [[{ text: '🔙 VOLVER AL INICIO', callback_data: '/init' }]] 
+            } 
+        });
+    }
 
-Info:
-/status — configuración actual y cron
-/configuration — editar variables .env
-/help — este menú`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+    async handleAdminMenu() {
+        if (!this.ctx.isAdmin) return;
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '👥 LISTAR USUARIOS', callback_data: '/users' }],
+                [{ text: '➕ INVITAR USUARIO', callback_data: 'admin_invite_prompt' }],
+                [{ text: '📊 STATUS DEL SISTEMA', callback_data: '/admin_status' }],
+                [{ text: '🔙 VOLVER', callback_data: '/init' }]
+            ]
+        };
+        await this.ctx.sendMessage('<b>👑 PANEL DE CONTROL</b>\n\nBienvenido, administrador. Gestiona los accesos y el estado general del bot.', {
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+        });
     }
 
     async handleStatus() {
-        const dry = config.debug.dryRun ? '🔒 DRY-RUN' : '🟢 REAL MONEY';
+        const uConfig = this.ctx.readEnvFile();
+        const dry = uConfig.debug.dryRun ? '🔒 DRY-RUN' : '🟢 REAL MONEY';
         const cronSt = this.ctx.getCronStatus();
         let parseCron = CronParse(cronSt.schedule);
 
-        await this.ctx.sendMessage(`📊 ESTADO ACTUAL DEL AGENTE
+        await this.ctx.sendMessage(`📊 <b>ESTADO ACTUAL DEL AGENTE</b>
 
-🎯 Pares: ${config.trading.pairs.join(',')}
-🧐 Personalidad: ${config.trading.personalityAgent}
-🔮 Vision: ${config.trading.visionAgent}
-🕯️ Velas: a ${config.indicators.candlesInterval} minutos
+🎯 Pares: <code>${uConfig.trading.pairs.join(',')}</code>
+🧐 Personalidad: <code>${uConfig.trading.personalityAgent}</code>
+🔮 Vision: <code>${uConfig.trading.visionAgent}</code>
+🕯️ Velas: a <code>${uConfig.indicators.candlesInterval}</code> minutos
 
-💰 Max trade: ${(config.trading.maxTradeSize * 100).toFixed(0)}%
-💵 Min orden: $${config.trading.minOrderUsd}
+💰 Max trade: <code>${(uConfig.trading.maxTradeSize * 100).toFixed(0)}%</code>
+💵 Min orden: <code>$${uConfig.trading.minOrderUsd}</code>
 
-🎯 TP: ${config.trading.takeProfitPct}%
-🎯 SL: ${config.trading.stopLossPct}%
+🎯 TP: <code>${uConfig.trading.takeProfitPct}%</code>
+🎯 SL: <code>${uConfig.trading.stopLossPct}%</code>
 
-🧠 Modelo: ${config.anthropic.model}
+🧠 Modelo: <code>${uConfig.anthropic.model}</code>
 
 ⏰ Cron: ${cronSt.enabled ? '✅ ACTIVO' : '⏸ INACTIVO'}
-📅 Ciclo: ${parseCron}
+📅 Ciclo: <code>${parseCron}</code>
 
-${dry}`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+${dry}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
     }
 
     async handleTradingStats() {
-        const stats = await getTradingPerformance();
+        const stats = await getTradingPerformance(this.ctx.chatId);
 
         if (!stats) {
             await this.ctx.sendMessage(
                 '❌ No se pudieron obtener las estadísticas',
-                { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } }
             );
             return;
         }
 
         const openPos = stats.openPositions?.length > 0
-            ? '\n\n📂 POSICIONES ABIERTAS\n' + stats.openPositions.map(p =>
-                `  • ${p.symbol}: ${p.qty} @ $${p.avgPrice} (coste $${p.totalCost})`
+            ? '\n\n📂 <b>POSICIONES ABIERTAS</b>\n' + stats.openPositions.map(p =>
+                `  • ${p.symbol}: <code>${p.qty}</code> @ <code>$${p.avgPrice}</code> (coste <code>$${p.totalCost}</code>)`
             ).join('\n')
             : '';
 
@@ -214,59 +243,53 @@ ${dry}`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] 
         const accumEmoji = accumRend > 0 ? '🟢' : accumRend < 0 ? '🔴' : '⚪';
 
         await this.ctx.sendMessage(
-            `📊 ESTADÍSTICAS TRADING AGENT
+            `📊 <b>ESTADÍSTICAS TRADING AGENT</b>
 
-🤔 Total decisions: ${stats.totalDecisions}
-📦 Total executed orders: ${stats.totalOrders}
-🛒 Total buys: ${stats.totalBuys}
-🤝🏻 Total sells: ${stats.totalSells}
-⚙️ Ratio de ejecución: ${stats.executionRate}
+🤔 Total decisions: <code>${stats.totalDecisions}</code>
+📦 Total executed orders: <code>${stats.totalOrders}</code>
+🛒 Total buys: <code>${stats.totalBuys}</code>
+🤝🏻 Total sells: <code>${stats.totalSells}</code>
+⚙️ Ratio de ejecución: <code>${stats.executionRate}</code>
 
-💰 BENEFICIO / PÉRDIDA REALIZADO
-💵 PnL realizado: ${stats.totalRealizedPnL} USD
-📈 ROI realizado: ${stats.roiRealized}
-💹 Total invertido: $${stats.totalInvested}
-${accumEmoji} Rendimiento acumulado: ${accumSign}${accumRend}%
+💰 <b>BENEFICIO / PÉRDIDA REALIZADO</b>
+💵 PnL realizado: <code>${stats.totalRealizedPnL} USD</code>
+📈 ROI realizado: <code>${stats.roiRealized}</code>
+💹 Total invertido: <code>$${stats.totalInvested}</code>
+${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
 
-🏆 Winning trades: ${stats.winningTrades}
-📉 Losing trades: ${stats.losingTrades}
-📊 Closed trades: ${stats.closedTrades}
-🎯 Win rate: ${stats.winRate}${openPos}`,
-            { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
+🏆 Winning trades: <code>${stats.winningTrades}</code>
+📉 Losing trades: <code>${stats.losingTrades}</code>
+📊 Closed trades: <code>${stats.closedTrades}</code>
+🎯 Win rate: <code>${stats.winRate}</code>${openPos}`,
+            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } }
         );
     }
 
     async handleCron(args) {
         if (args === 'on') {
             if (this.ctx.startCron(this.ctx.cronSchedule)) {
-                await this.ctx.sendMessage(`✅ Cron activado\nSchedule: >${this.ctx.cronSchedule}>`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                await this.ctx.sendMessage(`✅ Cron activado\nSchedule: <code>${this.ctx.cronSchedule}</code>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
             } else {
-                await this.ctx.sendMessage(`❌ Schedule inválido: >${this.ctx.cronSchedule}>`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                await this.ctx.sendMessage(`❌ Schedule inválido: <code>${this.ctx.cronSchedule}</code>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
             }
             return;
         }
 
         if (args === 'off') {
             this.ctx.stopCron();
-            await this.ctx.sendMessage('⏹ Cron desactivado. Las operaciones manuales siguen disponibles.', { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+            await this.ctx.sendMessage('⏹ Cron desactivado. Las operaciones manuales siguen disponibles.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
             return;
         }
 
         if (args && args.trim()) {
             const expr = args.trim();
             if (!cron.validate(expr)) {
-                await this.ctx.sendMessage(`❌ Expresión cron inválida: >${expr}>
-
-Ejemplos válidos:
->*/5 * * * *  → cada 5 min
->*/15 * * * * → cada 15 min
->0 * * * *    → cada hora
->0 */4 * * *  → cada 4 horas`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                await this.ctx.sendMessage(`❌ Expresión cron inválida: <code>${expr}</code>\n\nEjemplos válidos:\n<code>*/5 * * * *</code>  → cada 5 min\n<code>*/15 * * * *</code> → cada 15 min\n<code>0 * * * *</code>    → cada hora\n<code>0 */4 * * *</code>  → cada 4 horas`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
                 return;
             }
             if (this.ctx.startCron(expr)) {
                 let parseCron = CronParse(expr);
-                await this.ctx.sendMessage(`✅ Cron actualizado y activado\n Ciclo: ${parseCron}`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                await this.ctx.sendMessage(`✅ Cron actualizado y activado\n Ciclo: <code>${parseCron}</code>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
             }
             return;
         }
@@ -287,50 +310,59 @@ Ejemplos válidos:
         };
 
         await this.ctx.sendMessage(
-            `⏰ GESTIÓN DE CRON\n\n` +
+            `⏰ <b>GESTIÓN DE CRON</b>\n\n` +
             `Estado: ${st.enabled ? '✅ ACTIVO' : '⏸ INACTIVO'}\n` +
-            `Ciclo:📅 ${CronParse(st.schedule)}\n\n`,
-            keyboard
+            `Ciclo: 📅 <code>${CronParse(st.schedule)}</code>\n\n`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
         );
     }
 
     async handleCoinCommand(symbol) {
         const coin = COINS.find(c => c.symbol === symbol);
-        if (!coin) { await this.ctx.sendMessage('❌ Moneda no encontrada. Usa /help'); return; }
+        if (!coin) { await this.ctx.sendMessage('❌ Moneda no encontrada. Usa /help', { parse_mode: 'HTML' }); return; }
 
-        await this.ctx.sendMessage(`⏳ Analizando ${coin.emoji} ${symbol}...\n\nFetching datos → indicadores → Claude AI → ejecución`);
+        await this.ctx.sendMessage(`⏳ Analizando ${coin.emoji} ${symbol}...\n\nFetching datos → indicadores → Claude AI → ejecución`, { parse_mode: 'HTML' });
 
         try {
             await runAgentCycle('telegram', `${symbol}-USD`);
         } catch (err) {
             logger.error(`Coin command failed for ${symbol}:`, err.message);
-            await this.ctx.sendMessage(`❌ Error procesando ${coin.emoji} ${symbol}\n\n>${err.message}>\n\nIntenta de nuevo: /${symbol.toLowerCase()}`);
+            await this.ctx.sendMessage(`❌ Error procesando ${coin.emoji} ${symbol}\n\n<code>${err.message}</code>\n\nIntenta de nuevo: /${symbol.toLowerCase()}`, { parse_mode: 'HTML' });
         } finally {
             await this.handleMenu();
         }
     }
 
     async handleConfiguration() {
-        const keys = config.editableKeys;
-        let text = '⚙️ CONFIGURACIÓN API\n\n';
+        const userCfg = this.ctx.readEnvFile();
+        const keys = this.ctx.isAdmin ? userCfg.editableKeysAdmin : userCfg.editableKeys;
+        let text = '<b>⚙️ CONFIGURACIÓN API</b>\n\n';
 
         keys.forEach((key, i) => {
-            const value = config.getRaw(key) || '(no configurado)';
-            const display = key.includes('KEY') || key.includes('TOKEN')
-                ? value.substring(0, 10) + '...'
+            const value = userCfg.getRaw(key) || '(—)';
+            const display = key.includes('KEY') || key.includes('TOKEN') || key.includes('PEM')
+                ? value.substring(0, 8) + '...'
                 : value;
-            text += `${i + 1}. ${key}: ${display}\n`;
+            text += `${i + 1}. <code>${key}</code>\n   └ <code>${display}</code>\n`;
         });
 
-        text += `\n📝 Responde con el NÚMERO y luego el nuevo valor.\nEjemplo: 4 → claude-haiku-4-5`;
+        text += `\n✍️ <b>Cambio de valores:</b>\nResponde: <code>Número → Valor</code>\nEjemplo: <code>4 → claude-haiku-4-5</code>`;
 
-        this.configState.isConfiguring = true;
         this.configState.mode = 'api';
         this.configState.selectedKey = null;
-        await this.ctx.sendMessage(text, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+        this.configState.isConfiguring = true;
+        await this.ctx.sendMessage(text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
     }
 
     async handleConfigInput(text) {
+        if (this.configState.isInviting) {
+            this.configState.isInviting = false;
+            const input = text.trim();
+            // Pass to handleInvite
+            await this.handleInvite(input);
+            return;
+        }
+
         if (this.configState.isConfiguring && this.configState.mode === 'asking') {
             const question = text.trim();
             const symbol = this.configState.symbol;
@@ -339,7 +371,7 @@ Ejemplos válidos:
             this.configState.mode = null;
             this.configState.symbol = null;
 
-            await this.ctx.sendMessage(`⏳ Procesando pregunta para *${symbol}*...\n_"${question}"_`, { parse_mode: 'Markdown' });
+            await this.ctx.sendMessage(`⏳ Procesando pregunta para <b>${symbol}</b>...\n<i>"${question}"</i>`, { parse_mode: 'HTML' });
 
             try {
                 await runAgentCycle('manual', symbol, question);
@@ -351,13 +383,15 @@ Ejemplos válidos:
 
         if (this.configState.isConfiguring) {
             if (!this.configState.selectedKey) {
+                const userCfg = this.ctx.readEnvFile();
+                const isApiMode = this.configState.mode === 'api';
                 const keys = this.configState.mode === 'agent'
-                    ? config.editableKeysAgent
-                    : config.editableKeys;
+                    ? userCfg.editableKeysAgent
+                    : (this.ctx.isAdmin ? userCfg.editableKeysAdmin : userCfg.editableKeys);
 
                 const idx = parseInt(text.trim()) - 1;
                 if (isNaN(idx) || idx < 0 || idx >= keys.length) {
-                    await this.ctx.sendMessage(`❌ Número inválido (1-${keys.length})`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                    await this.ctx.sendMessage(`❌ Número inválido (1-${keys.length})`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
                     return;
                 }
 
@@ -366,34 +400,40 @@ Ejemplos válidos:
 
                 // Interactive options for specific agent keys
                 if (key === 'VISION_AGENT') {
-                    await this.ctx.sendMessage('🔭 Selecciona la VISIÓN del agente:', {
-                        inline_keyboard: [
-                            [
-                                { text: 'Short', callback_data: 'SET_AGENT_CFG:VISION_AGENT:short' },
-                                { text: 'Medium', callback_data: 'SET_AGENT_CFG:VISION_AGENT:medium' },
-                                { text: 'Long', callback_data: 'SET_AGENT_CFG:VISION_AGENT:long' }
-                            ],
-                            [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
-                        ]
+                    await this.ctx.sendMessage('🔭 <b>VISIÓN DEL AGENTE</b>\n\nSelecciona el horizonte temporal de análisis:', {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: '⌛ Short', callback_data: 'SET_AGENT_CFG:VISION_AGENT:short' },
+                                    { text: '📅 Medium', callback_data: 'SET_AGENT_CFG:VISION_AGENT:medium' },
+                                    { text: '🌌 Long', callback_data: 'SET_AGENT_CFG:VISION_AGENT:long' }
+                                ],
+                                [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
+                            ]
+                        }
                     });
                     return;
                 }
 
                 if (key === 'PERSONALITY_AGENT') {
-                    await this.ctx.sendMessage('🧠 Selecciona la PERSONALIDAD del agente:', {
-                        inline_keyboard: [
-                            [
-                                { text: 'Conservative', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Conservative' },
-                                { text: 'Moderate', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Moderate' },
-                                { text: 'Aggressive', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:Aggressive' }
-                            ],
-                            [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
-                        ]
+                    await this.ctx.sendMessage('🧠 <b>PERSONALIDAD DEL AGENTE</b>\n\nSelecciona el perfil de riesgo:', {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: '🛱️ Conservative', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:conservative' },
+                                    { text: '⚖️ Moderate', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:moderate' },
+                                    { text: '🔥 Aggressive', callback_data: 'SET_AGENT_CFG:PERSONALITY_AGENT:aggressive' }
+                                ],
+                                [{ text: '🔙 CANCELAR', callback_data: '/agent' }]
+                            ]
+                        }
                     });
                     return;
                 }
 
-                await this.ctx.sendMessage(`✏️ ${this.configState.selectedKey}\n\nEscribe el nuevo valor:`, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+                await this.ctx.sendMessage(`✏️ Escribe el nuevo valor para <code>${this.configState.selectedKey}</code>:`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
                 return;
             }
 
@@ -401,42 +441,109 @@ Ejemplos válidos:
             const value = text.trim();
             const ok = this.ctx.updateEnvFile(key, value);
 
-            await this.ctx.sendMessage(ok
-                ? `✅ ${key} actualizado.\n\nRegresa al menú con /init`
-                : `❌ Error guardando ${key}`,
-                { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] }
-            );
-
             this.configState.isConfiguring = false;
             this.configState.selectedKey = null;
+            this.configState.mode = null;
+
+            await this.ctx.sendMessage(
+                ok
+                    ? `✅ <b>Configuración guardada</b>\n\n<code>${key}</code> → <code>${value}</code>`
+                    : `❌ Error guardando ${key}`,
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🤖 AGENTE CONFIG', callback_data: '/agent' }, { text: '🏠 MENÚ', callback_data: '/init' }]] } }
+            );
         }
     }
-    async handleConfigurationAgent() {
-        const keys = config.editableKeysAgent;
-        let text = '⚙️ CONFIGURACIÓN AGENT\n\n';
 
-        keys.forEach((key, i) => {
-            const value = config.getRaw(key) || '(no configurado)';
-            if (key == 'INDICATORS_CANDLES_INTERVAL') {
-                text += `${i + 1}. ${key}: ${value} (min)\n`;
-            } else if (key == 'TAKE_PROFIT_PCT' || key == 'STOP_LOSS_PCT') {
-                text += `${i + 1}. ${key}: ${value} %\n`;
-            } else if (key == 'MIN_ORDER') {
-                text += `${i + 1}. ${key}: ${value} USD\n`;
-            }
-            else {
-                text += `${i + 1}. ${key}: ${value}\n`;
-            }
+    // ── Admin Handlers ──────────────────────────────────────────
+
+    async handleInvite(username) {
+        if (!username) {
+            await this.ctx.sendMessage('❌ Uso: `/invite @username`');
+            return;
+        }
+        const { inviteUser } = await import('../users/user-registry.js');
+        const result = await inviteUser({
+            telegramUsername: username.replace('@', ''),
+            invitedBy: String(this.ctx.chatId)
         });
 
-        text += `\n📝 Responde con el NÚMERO y luego el nuevo valor SOLO NUMERICO.\nEjemplo: 8 → 20\n`;
-        text += `\n❓Para los Ciclos temporales se usan las monedas configuradas en TRADING_PAIRS se analizaran 
-        cada Ciclo de agente una a una de la lista compuesta.`;
+        if (result.ok) {
+            await this.ctx.sendMessage(`✅ @${result.username} ha sido invitado.`);
+        } else {
+            await this.ctx.sendMessage(`⚠️ ${result.reason}`);
+        }
+    }
+
+    async handleListUsers() {
+        const { listUsers } = await import('../users/user-registry.js');
+        const users = await listUsers();
+        if (!users.length) {
+            await this.ctx.sendMessage('No hay usuarios registrados.');
+            return;
+        }
+
+        const statusEmoji = { pending_invite: '⏳', pending_setup: '🔧', active: '✅', suspended: '🚫' };
+        let msg = `👥 <b>Usuarios registrados</b> (${users.length})\n\n`;
+        for (const u of users) {
+            const emoji = statusEmoji[u.status] || '❓';
+            msg += `${emoji} @${u.telegram_username || '?'} — ${u.status}\n`;
+            msg += `   ID: <code>${u.telegram_id || 'pte'}</code> | Pares: ${u.config?.TRADING_PAIRS || '—'}\n`;
+        }
+        await this.ctx.sendMessage(msg, { parse_mode: 'HTML' });
+    }
+
+    async handleRevokeUser(username) {
+        if (!username) {
+            await this.ctx.sendMessage('❌ Uso: `/revoke @username`');
+            return;
+        }
+        const { revokeUser } = await import('../users/user-registry.js');
+        const result = await revokeUser(username.replace('@', ''));
+
+        if (result.ok) {
+            await this.ctx.sendMessage(`🚫 @${result.username} ha sido suspendido.`);
+            // Note: Session destruction is handled by the multi-user-bot router reactively if needed
+        } else {
+            await this.ctx.sendMessage(`⚠️ ${result.reason}`);
+        }
+    }
+
+    async handleAdminStatus() {
+        const { listUsers } = await import('../users/user-registry.js');
+        const users = await listUsers();
+        const active = users.filter(u => u.status === 'active').length;
+        const pending = users.filter(u => u.status === 'pending_setup' || u.status === 'pending_invite').length;
+
+        await this.ctx.sendMessage(
+            `🤖 <b>Admin Status</b>\n\n` +
+            `👥 Total usuarios: ${users.length}\n` +
+            `✅ Activos: ${active}\n` +
+            `🔧 Pendientes: ${pending}\n` +
+            `🖥 Node: ${process.version}`,
+            { parse_mode: 'HTML' }
+        );
+    }
+    async handleConfigurationAgent() {
+        const userCfg = this.ctx.readEnvFile();
+        const keys = userCfg.editableKeysAgent;
+        let text = '<b>🤖 PARÁMETROS DEL AGENTE</b>\n\n';
+
+        keys.forEach((key, i) => {
+            const value = userCfg.getRaw(key) || '(—)';
+            let unit = '';
+            if (key.includes('INTERVAL')) unit = ' min';
+            if (key.includes('PCT')) unit = ' %';
+            if (key.includes('MIN_ORDER')) unit = ' USD';
+
+            text += `${i + 1}. <code>${key}</code>\n   └ <code>${value}${unit}</code>\n`;
+        });
+
+        text += '\n✍️ <b>Cambio de valores:</b>\nResponde: <code>Número → Valor</code>\nEjemplo: <code>8 → 30</code>';
 
         this.configState.isConfiguring = true;
         this.configState.mode = 'agent';
         this.configState.selectedKey = null;
-        await this.ctx.sendMessage(text, { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] });
+        await this.ctx.sendMessage(text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
     }
 
     async handleCallback(callbackQueryId, data, messageId) {
@@ -453,12 +560,29 @@ Ejemplos válidos:
             if (data === '/stats') return await this.handleTradingStats();
             if (data === '/agent') return await this.handleConfigurationAgent();
             if (data === '/ask') return await this.handleAsk();
+            if (data === '/admin') return await this.handleAdminMenu();
+            if (data === '/users') return await this.handleListUsers();
+            if (data === '/admin_status') return await this.handleAdminStatus();
 
             const symbol = data.substring(1).toUpperCase();
             if (COINS.some(c => c.symbol === symbol)) {
                 await this.handleCoinCommand(symbol);
                 return;
             }
+        }
+
+        if (data === 'admin_invite_prompt') {
+            if (!this.ctx.isAdmin) return;
+            this.configState.isInviting = true;
+            this.configState.isConfiguring = false;
+            this.configState.mode = null;
+            await this.ctx.sendMessage(
+                '<b>👤 NUEVA INVITACIÓN</b>\n\n' +
+                'Escribe a continuación el <b>@nombre_de_usuario</b> o el <b>ID numérico</b> del usuario que quieres autorizar.\n\n' +
+                '<i>Nota: El usuario debe tener un alias (@) configurado en Telegram, o puedes usar su ID numérico.</i>',
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 CANCELAR', callback_data: '/admin' }]] } }
+            );
+            return;
         }
 
         if (data === 'cron_on') {
@@ -511,8 +635,8 @@ Ejemplos válidos:
             this.configState.symbol = symbol;
 
             await this.ctx.editMessage(messageId,
-                `💬 *PREGUNTA PARA ${symbol}*\n\nEscribe tu pregunta ahora. El agente analizará el mercado y responderá teniendo en cuenta tu consulta.`,
-                { parse_mode: 'Markdown', inline_keyboard: [[{ text: '🔙 CANCELAR', callback_data: '/ask' }]] }
+                `💬 <b>PREGUNTA PARA ${symbol}</b>\n\nEscribe tu pregunta ahora. El agente analizará el mercado y responderá teniendo en cuenta tu consulta.`,
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 CANCELAR', callback_data: '/ask' }]] } }
             );
             return;
         }
@@ -521,14 +645,23 @@ Ejemplos válidos:
             const [, key, value] = data.split(':');
             const ok = this.ctx.updateEnvFile(key, value);
 
-            await this.ctx.editMessage(messageId, ok
-                ? `✅ ${key} actualizado a: *${value}*`
-                : `❌ Error actualizando ${key}`,
-                { parse_mode: 'Markdown', inline_keyboard: [[{ text: '🔙 VOLVER', callback_data: '/agent' }]] }
-            );
-
             this.configState.isConfiguring = false;
             this.configState.selectedKey = null;
+            this.configState.mode = null;
+
+            await this.ctx.editMessage(messageId,
+                ok
+                    ? `✅ <b>${key}</b> actualizado a <code>${value}</code>`
+                    : `❌ Error actualizando ${key}`,
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🤖 VOLVER A AGENTE', callback_data: '/agent' }]] } }
+            );
+
+            if (ok) {
+                await this.ctx.sendMessage(
+                    `✅ <b>Configuración guardada</b>\n\n<code>${key}</code> → <code>${value}</code>`,
+                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🤖 AGENTE CONFIG', callback_data: '/agent' }, { text: '🏠 MENÚ', callback_data: '/init' }]] } }
+                );
+            }
             return;
         }
     }

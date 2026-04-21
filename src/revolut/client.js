@@ -22,23 +22,33 @@ function updateClockOffset(serverTimestampMs) {
 }
 
 export class RevolutClient {
-  constructor() {
-    this.baseUrl = config.revolut.baseUrl;
-    this.apiKey = config.revolut.apiKey;
-    this.debugApi = config.debug.debugApi;
+  constructor(userConfig = null) {
+    const revConfig = userConfig?.revolut || config.revolut;
+    const debugConfig = userConfig?.debug || config.debug;
+
+    this.baseUrl = revConfig.baseUrl;
+    this.apiKey = revConfig.apiKey || revConfig.REVOLUT_API_KEY;
+    this.debugApi = debugConfig.debugApi;
 
     if (!this.apiKey) {
-      throw new Error('Missing REVOLUT_API_KEY');
+      throw new Error('Missing Revolut API Key');
     }
 
-    const keyPath = path.resolve(config.revolut.privateKeyPath || '');
-    if (!fs.existsSync(keyPath)) {
-      throw new Error(`Private key not found at: ${keyPath}`);
+    // Support both file path (single user) and direct PEM string (multi user)
+    const privateKey = (revConfig.privateKeyPem || revConfig.REVOLUT_PRIVATE_KEY_PEM);
+    
+    if (privateKey && privateKey.includes('PRIVATE KEY')) {
+      this.privateKeyPem = privateKey;
+    } else {
+      const keyPath = path.resolve(revConfig.privateKeyPath || '');
+      if (!fs.existsSync(keyPath)) {
+        throw new Error(`Private key not found at: ${keyPath}`);
+      }
+      this.privateKeyPem = fs.readFileSync(keyPath, 'utf8');
     }
 
-    this.privateKeyPem = fs.readFileSync(keyPath, 'utf8');
     if (!this.privateKeyPem.includes('PRIVATE KEY')) {
-      throw new Error(`Invalid private key format at: ${keyPath}`);
+      throw new Error('Invalid private key format');
     }
   }
 
@@ -94,7 +104,7 @@ export class RevolutClient {
 
     if (res.status === 409) {
       let errBody = {};
-      try { errBody = JSON.parse(text); } catch {}
+      try { errBody = JSON.parse(text); } catch { }
 
       if (errBody.timestamp && String(errBody.message || '').toLowerCase().includes('timestamp')) {
         logger.warn(`⏰ Clock skew detected. Server timestamp: ${errBody.timestamp}. Retrying...`);

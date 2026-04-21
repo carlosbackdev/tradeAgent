@@ -1,0 +1,225 @@
+/**
+ * users/user-session.js
+ * A per-user isolated session that wraps TelegramHandlers with the user's own config.
+ * Each active user gets one UserSession instance, completely isolated from others.
+ */
+
+import cron from 'node-cron';
+import { logger } from '../utils/logger.js';
+import { TelegramHandlers } from '../telegram/telegram-handlers.js';
+import { TelegramCommands } from '../telegram/commands.js';
+import { runAgentCycle } from '../agent/executor.js';
+import { CronParse } from '../utils/formatter.js';
+import { updateUserConfig } from './user-registry.js';
+
+export class UserSession {
+  constructor({ user, userConfig, sendMessage, editMessage, answerCallback }) {
+    this.user = user;
+    this.userConfig = userConfig;
+    this.userId = user.telegram_id;
+    this.username = user.telegram_username;
+
+    // Communication helpers bound to this user's chat
+    this._send = sendMessage;
+    this._edit = editMessage;
+    this._answer = answerCallback;
+
+    // Cron task for this user only
+    this.cronTask = null;
+
+    // Build the bot context compatible with TelegramHandlers
+    const self = this;
+    const ADMIN_ID = process.env.ADMIN_TELEGRAM_ID ? String(process.env.ADMIN_TELEGRAM_ID).trim() : null;
+    const currentId = String(this.userId).trim();
+    const isAdmin = ADMIN_ID && currentId === ADMIN_ID;
+
+    if (isAdmin) logger.info(`👑 Session ${this.userId} initialized with ADMIN privileges`);
+    
+    this.botContext = {
+      isAdmin: !!isAdmin,
+      chatId: this.userId,
+      sendMessage: (t, r) => sendMessage(t, r),
+      editMessage: (m, t, r) => editMessage(m, t, r),
+      answerCallback: (c, t) => answerCallback(c, t),
+      readEnvFile: () => userConfig,
+      updateEnvFile: (k, v) => self.updateConfig(k, v),
+      startCron: (s) => self.startCron(s),
+      stopCron: () => self.stopCron(),
+      getCronStatus: () => self.getCronStatus(),
+      get cronSchedule() { return userConfig.cron.schedule; },
+      set cronSchedule(s) { userConfig.cron.schedule = s; },
+    };
+
+    this.handlers = new TelegramHandlers(this.botContext);
+    this.commandsRouter = new TelegramCommands(this.handlers, (t, r) => sendMessage(t, r));
+  }
+
+  async init() {
+    // Auto-start cron if user had it enabled
+    if (this.userConfig.cron.enabled && cron.validate(this.userConfig.cron.schedule)) {
+      this.startCron(this.userConfig.cron.schedule);
+      logger.info(`⏰ Auto-started cron for user ${this.username}: ${this.userConfig.cron.schedule}`);
+    }
+
+    // Send init message
+    await this.handlers.handleInit().catch(() => {});
+    logger.info(`✅ UserSession initialized for @${this.username}`);
+  }
+
+  async handleMessage(text, messageId) {
+    // Intercept /config command for user-specific settings
+    if (text === '/myconfig') {
+      return this.showUserConfig();
+    }
+    if (text === '/resetconfig') {
+      return this.promptResetConfig();
+    }
+    await this.commandsRouter.processTextMessage({ text, message_id: messageId });
+  }
+
+  async handleCallback(callbackQueryId, data, messageId) {
+    await this._answer(callbackQueryId);
+
+    // Handle user-specific callbacks
+    if (data === 'reset_config_confirm') {
+      await this.resetUserConfig();
+      return;
+    }
+
+    await this.handlers.handleCallback(callbackQueryId, data, messageId);
+  }
+
+  // ── Config management ──────────────────────────────────────────
+
+  updateConfig(key, value) {
+    // Update in-memory
+    const cfg = this.user.config || {};
+    cfg[key] = value;
+    this.user.config = cfg;
+
+    // Rebuild trading/debug/etc sub-objects
+    const parseNum = (val, fb) => { const n = parseFloat(String(val || '').replace(',', '.')); return isNaN(n) ? fb : n; };
+    if (key === 'TRADING_PAIRS') {
+      this.userConfig.trading.pairs = value.split(',').map(p => p.trim()).filter(Boolean);
+    } else if (key === 'MAX_TRADE_SIZE') {
+      this.userConfig.trading.maxTradeSize = parseNum(value, 0.10);
+    } else if (key === 'MIN_ORDER') {
+      this.userConfig.trading.minOrderUsd = parseNum(value, 50);
+    } else if (key === 'TAKE_PROFIT_PCT') {
+      this.userConfig.trading.takeProfitPct = parseNum(value, 0);
+    } else if (key === 'STOP_LOSS_PCT') {
+      this.userConfig.trading.stopLossPct = parseNum(value, 0);
+    } else if (key === 'VISION_AGENT') {
+      this.userConfig.trading.visionAgent = value;
+    } else if (key === 'PERSONALITY_AGENT') {
+      this.userConfig.trading.personalityAgent = value;
+    } else if (key === 'INDICATORS_CANDLES_INTERVAL') {
+      this.userConfig.indicators.candlesInterval = parseNum(value, 15);
+    } else if (key === 'ANTHROPIC_MODEL') {
+      this.userConfig.anthropic.model = value;
+    } else if (key === 'DRY_RUN') {
+      this.userConfig.debug.dryRun = value === 'true';
+    } else if (key === 'CRON_SCHEDULE') {
+      this.userConfig.cron.schedule = value;
+    } else if (key === 'CRON_ENABLED') {
+      this.userConfig.cron.enabled = value === 'true';
+    }
+
+    // Persist to MongoDB
+    updateUserConfig(this.userId, { [key]: value }).catch(err =>
+      logger.warn(`Failed to persist config for user ${this.userId}: ${err.message}`)
+    );
+    return true;
+  }
+
+  async showUserConfig() {
+    const cfg = this.user.config || {};
+    const dry = this.userConfig.debug.dryRun ? '🔒 DRY RUN' : '🔴 REAL MONEY';
+
+    await this._send(
+      `⚙️ *Tu configuración*\n\n` +
+      `🎯 Pares: ${this.userConfig.trading.pairs.join(', ')}\n` +
+      `💰 Max trade: ${(this.userConfig.trading.maxTradeSize * 100).toFixed(0)}%\n` +
+      `💵 Min orden: $${this.userConfig.trading.minOrderUsd}\n` +
+      `🎯 TP: ${this.userConfig.trading.takeProfitPct}%\n` +
+      `🎯 SL: ${this.userConfig.trading.stopLossPct}%\n` +
+      `🧠 Modelo: ${this.userConfig.anthropic.model}\n` +
+      `🌐 URL Revolut: ${this.userConfig.revolut.baseUrl}\n` +
+      `${dry}\n` +
+      `\n🔑 API Key: \`${(cfg.REVOLUT_API_KEY || '').substring(0, 12)}...\`\n` +
+      `🤖 Anthropic: \`${(cfg.ANTHROPIC_API_KEY || '').substring(0, 10)}...\``
+    );
+  }
+
+  async promptResetConfig() {
+    await this._send(
+      '⚠️ *¿Resetear configuración?*\n\n' +
+      'Esto borrará tu API Key de Revolut, la clave privada y la de Anthropic.\n' +
+      'Tendrás que volver a configurarlo todo desde /start.',
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔴 Sí, resetear', callback_data: 'reset_config_confirm' }],
+            [{ text: '❌ Cancelar', callback_data: '/init' }],
+          ]
+        }
+      }
+    );
+  }
+
+  async resetUserConfig() {
+    await updateUserConfig(this.userId, {
+      REVOLUT_API_KEY: '',
+      REVOLUT_PRIVATE_KEY_PEM: '',
+      ANTHROPIC_API_KEY: '',
+    });
+    this.stopCron();
+    await this._send('✅ Configuración de API reseteada. Vuelve a configurar con /start.');
+  }
+
+  // ── Cron management (per-user) ─────────────────────────────────
+
+  startCron(schedule) {
+    if (this.cronTask) { this.cronTask.stop(); this.cronTask = null; }
+    if (!cron.validate(schedule)) return false;
+
+    this.cronTask = cron.schedule(schedule, async () => {
+      logger.info(`⏰ [User: ${this.username}] Cron triggered: ${schedule}`);
+      try {
+        for (const coin of this.userConfig.trading.pairs) {
+          // Pass userConfig to executor so it uses this user's keys
+          await runAgentCycle('cron', coin, '', this.userConfig);
+        }
+        await this.handlers.handleMenu();
+      } catch (err) {
+        logger.error(`[User: ${this.username}] Cron cycle failed: ${err.message}`);
+      }
+    });
+
+    this.updateConfig('CRON_ENABLED', 'true');
+    this.updateConfig('CRON_SCHEDULE', schedule);
+    logger.info(`✅ [User: ${this.username}] Cron started: ${schedule}`);
+    return true;
+  }
+
+  stopCron() {
+    if (this.cronTask) { this.cronTask.stop(); this.cronTask = null; }
+    this.updateConfig('CRON_ENABLED', 'false');
+    logger.info(`⏹ [User: ${this.username}] Cron stopped`);
+  }
+
+  getCronStatus() {
+    const enabled = this.userConfig.cron.enabled && !!this.cronTask;
+    const schedule = this.userConfig.cron.schedule;
+    return {
+      enabled,
+      schedule,
+      next: enabled ? `Próximo ciclo según: ${schedule}` : 'Desactivado',
+    };
+  }
+
+  destroy() {
+    this.stopCron();
+    logger.info(`🗑 Session destroyed for @${this.username}`);
+  }
+}

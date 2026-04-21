@@ -9,7 +9,7 @@ import { buildAnalyzerMessage } from '../context/analyzer-market.js';
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config/config.js';
 
-export const client = new Anthropic({ apiKey: config.anthropic.apiKey });
+// No global client needed for multi-user support
 
 /**
  * Parse Claude's JSON response robustly
@@ -45,15 +45,20 @@ export function parseClaudeJsonResponse(raw) {
 
 /**
  * Call Claude with custom message and system prompt
- * @param {string} userMessage - User message content
- * @param {string} systemPrompt - System prompt (if different from default)
- * @returns {Object} Parsed JSON response from Claude
  */
-export async function callClaudeWithCustomPrompt(userMessage, systemPrompt = null) {
-  const effectiveSystemPrompt = systemPrompt || getSystemPrompt(config.trading);
+export async function callClaudeWithCustomPrompt(userMessage, apiKey = null, model = null, tradingConfig = null, systemPrompt = null) {
+  const effectiveSystemPrompt = systemPrompt || getSystemPrompt(tradingConfig || config.trading);
+  const effectiveModel = model || config.anthropic.model;
+  const effectiveApiKey = apiKey || config.anthropic.apiKey;
 
-  const response = await client.messages.create({
-    model: config.anthropic.model,
+  if (!effectiveApiKey) {
+    throw new Error('No Anthropic API Key provided');
+  }
+
+  const anthropic = new Anthropic({ apiKey: effectiveApiKey });
+
+  const response = await anthropic.messages.create({
+    model: effectiveModel,
     max_tokens: 2048,
     system: effectiveSystemPrompt,
     messages: [{ role: 'user', content: [{ type: 'text', text: userMessage }] }],
@@ -67,8 +72,8 @@ export async function callClaudeWithCustomPrompt(userMessage, systemPrompt = nul
   return parseClaudeJsonResponse(raw);
 }
 
-export async function callAgentAnalyzer(context, question) {
+export async function callAgentAnalyzer(context, question, apiKey = null, model = null, tradingConfig = null) {
   let userMessage = buildAnalyzerMessage(context, question);
-  return callClaudeWithCustomPrompt(userMessage);
+  return callClaudeWithCustomPrompt(userMessage, apiKey, model, tradingConfig);
 }
 
