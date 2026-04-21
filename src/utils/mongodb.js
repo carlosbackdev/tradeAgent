@@ -76,18 +76,20 @@ async function initializeCollections() {
  * @param {string} trigger - 'cron' or 'manual'
  * @returns {Object} Saved document with _id
  */
-export async function saveDecision(decision, trigger = 'cron') {
+export async function saveDecision(decision, trigger = 'cron', chatId = null) {
   const db = await connectDB();
   const decisionsCollection = db.collection('decisions');
 
   const doc = {
     created_at: new Date(),
+    chat_id: chatId ? String(chatId) : null,
     symbol: decision.symbol,
     action: decision.action,
     confidence: decision.confidence,
     reasoning: decision.reasoning,
     risks: decision.risks,
     trigger,
+    positionPct: decision.positionPct || null,
     usdAmount: decision.usdAmount,
     orderType: decision.orderType,
     takeProfit: decision.takeProfit || null,
@@ -97,7 +99,7 @@ export async function saveDecision(decision, trigger = 'cron') {
 
   try {
     const result = await decisionsCollection.insertOne(doc);
-    logger.debug(`📊 Decision saved (ID: ${result.insertedId}) | TP: ${decision.takeProfit} SL: ${decision.stopLoss}`);
+    logger.debug(`📊 Decision saved (ID: ${result.insertedId}) | user: ${chatId} | TP: ${decision.takeProfit} SL: ${decision.stopLoss}`);
     return { ...doc, _id: result.insertedId };
   } catch (err) {
     logger.error('Failed to save decision', err.message);
@@ -117,6 +119,7 @@ export async function saveOrder({
   orderType,
   qty,
   price,
+  positionPct,
   usdAmount,
   revolutOrderId,
   takeProfit,
@@ -125,6 +128,7 @@ export async function saveOrder({
   status,
   error,
   rendimiento,
+  chatId,
 }) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
@@ -136,12 +140,14 @@ export async function saveOrder({
 
   const doc = {
     created_at: new Date(),
+    chat_id: chatId ? String(chatId) : null,
     decision_id: decisionId,
     symbol,
     side,
     order_type: orderType,
     qty: safeParse(qty),
     price: safeParse(price),
+    position_pct: safeParse(positionPct),
     usd_amount: safeParse(usdAmount),
     revolut_order_id: revolutOrderId,
     take_profit: safeParse(takeProfit),
@@ -154,7 +160,7 @@ export async function saveOrder({
 
   try {
     const result = await ordersCollection.insertOne(doc);
-    logger.info(`✅ Order SAVED to MongoDB: ${side.toUpperCase()} ${symbol} ($${doc.usd_amount}) | ID: ${result.insertedId}`);
+    logger.info(`✅ Order SAVED to MongoDB: ${side.toUpperCase()} ${symbol} ($${doc.usd_amount}) | user: ${chatId} | ID: ${result.insertedId}`);
     return { ...doc, _id: result.insertedId };
   } catch (err) {
     logger.error('❌ Failed to save order to MongoDB', err.message);
@@ -168,18 +174,19 @@ export async function saveOrder({
  * @param {Object} balances - Current portfolio balances
  * @returns {Object} Saved snapshot document
  */
-export async function savePortfolioSnapshot(balances) {
+export async function savePortfolioSnapshot(balances, chatId = null) {
   const db = await connectDB();
   const snapshotsCollection = db.collection('portfolio_snapshots');
 
   const doc = {
     created_at: new Date(),
-    balances: balances, // Stored as-is (MongoDB handles objects)
+    chat_id: chatId ? String(chatId) : null,
+    balances: balances,
   };
 
   try {
     const result = await snapshotsCollection.insertOne(doc);
-    logger.debug(`💰 Portfolio snapshot saved (ID: ${result.insertedId})`);
+    logger.debug(`💰 Portfolio snapshot saved (ID: ${result.insertedId}) | user: ${chatId}`);
     return { ...doc, _id: result.insertedId };
   } catch (err) {
     logger.error('Failed to save portfolio snapshot', err.message);
@@ -193,14 +200,17 @@ export async function savePortfolioSnapshot(balances) {
  * @param {number} limit - Number of previous decisions to return (default: 3)
  * @returns {Array} Previous decisions sorted by date (newest first)
  */
-export async function getPreviousDecisions(symbol, limit = 3) {
+export async function getPreviousDecisions(symbol, chatId = null, limit = 3) {
   const db = await connectDB();
   const decisionsCollection = db.collection('decisions');
 
   try {
     const querySymbol = { $in: [symbol, symbol.replace('-', '/'), symbol.replace('/', '-')] };
+    const query = { symbol: querySymbol };
+    if (chatId) query.chat_id = String(chatId);
+
     const decisions = await decisionsCollection
-      .find({ symbol: querySymbol })
+      .find(query)
       .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
@@ -208,7 +218,7 @@ export async function getPreviousDecisions(symbol, limit = 3) {
     return decisions;
   } catch (err) {
     logger.warn(`Failed to get previous decisions for ${symbol}: ${err.message}`);
-    return []; // Return empty array on error - don't fail the cycle
+    return [];
   }
 }
 

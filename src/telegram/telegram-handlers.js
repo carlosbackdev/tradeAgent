@@ -324,7 +324,7 @@ ${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
         await this.ctx.sendMessage(`⏳ Analizando ${coin.emoji} ${symbol}...\n\nFetching datos → indicadores → Claude AI → ejecución`, { parse_mode: 'HTML' });
 
         try {
-            await runAgentCycle('telegram', `${symbol}-USD`);
+            await runAgentCycle('telegram', `${symbol}-USD`, '', this.ctx.readEnvFile());
         } catch (err) {
             logger.error(`Coin command failed for ${symbol}:`, err.message);
             await this.ctx.sendMessage(`❌ Error procesando ${coin.emoji} ${symbol}\n\n<code>${err.message}</code>\n\nIntenta de nuevo: /${symbol.toLowerCase()}`, { parse_mode: 'HTML' });
@@ -374,7 +374,7 @@ ${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
             await this.ctx.sendMessage(`⏳ Procesando pregunta para <b>${symbol}</b>...\n<i>"${question}"</i>`, { parse_mode: 'HTML' });
 
             try {
-                await runAgentCycle('manual', symbol, question);
+                await runAgentCycle('manual', symbol, question, this.ctx.readEnvFile());
             } catch (err) {
                 await this.ctx.sendMessage(`❌ Error: ${err.message}`);
             }
@@ -604,9 +604,10 @@ ${accumEmoji} Rendimiento acumulado: <code>${accumSign}${accumRend}%</code>
         if (data === 'cron_now') {
             await this.ctx.editMessage(messageId, '⏳ Ejecutando ciclo ahora...');
             try {
-                const pairs = config.trading.pairs;
+                const userCfg = this.ctx.readEnvFile();
+                const pairs = userCfg.trading?.pairs || userCfg.editableKeysAgent;
                 for (const coin of pairs) {
-                    await runAgentCycle('manual', coin);
+                    await runAgentCycle('manual', coin, '', userCfg);
                 }
                 await this.ctx.editMessage(messageId, '✅ Ciclo completado. Revisa el reporte arriba ↑');
             } catch (err) {
