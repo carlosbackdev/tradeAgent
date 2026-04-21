@@ -9,6 +9,7 @@ import { notify } from '../../telegram/handles.js';
 import { saveOrder, saveDecision } from '../../utils/mongodb.js';
 import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
 import { escapeHTML } from '../../utils/formatter.js';
+import { OrderManager } from '../../revolut/orders.js';
 
 /**
  * Fetch pending (open) orders for a specific symbol from Revolut API
