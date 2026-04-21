@@ -90,6 +90,7 @@ export async function saveDecision(decision, trigger = 'cron', chatId = null) {
     risks: decision.risks,
     trigger,
     positionPct: decision.positionPct || null,
+    currentPrice: decision.currentPrice || null,   // market price at decision time
     usdAmount: decision.usdAmount,
     orderType: decision.orderType,
     takeProfit: decision.takeProfit || null,

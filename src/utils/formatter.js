@@ -15,10 +15,16 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
     msg += `No trades executed this cycle.\n`;
   } else {
     for (const result of execResults) {
-      msg += `\n🔸 ${result.symbol}\n`;
+      const emoji = result.action === 'BUY' ? '🟢' : result.action === 'SELL' ? '🔴' : '⚪';
+      msg += `\n${emoji} ${result.symbol}\n`;
       msg += `  • Action: ${result.action.toUpperCase()}\n`;
       msg += `  • Confidence: ${result.confidence}%\n`;
-      msg += `  • Amount: $${result.usdAmount}\n`;
+      // Show USD amount for executed/active orders, positionPct for HOLDs
+      if (result.status === 'executed' && result.usdAmount) {
+        msg += `  • Amount: $${Number(result.usdAmount).toFixed(2)}\n`;
+      } else if (result.positionPct > 0) {
+        msg += `  • Size: ${(result.positionPct * 100).toFixed(0)}% del balance\n`;
+      }
       if (result.rendimiento != null) {
         const sign = result.rendimiento >= 0 ? '+' : '';
         msg += `  📈 Rendimiento: ${sign}${result.rendimiento.toFixed(2)}%\n`;

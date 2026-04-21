@@ -126,6 +126,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
               timestamp: d.created_at.toISOString(),
               action: d.action,
               confidence: d.confidence,
+              price: d.currentPrice || null,
               reasoning: d.reasoning?.substring(0, 80),
               currentPnlPct: d.currentPnlPct !== undefined ? d.currentPnlPct : null,
             }));
@@ -148,7 +149,10 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     analyzerContext.previousDecisions = previousDecisionsBySymbol;
     analyzerContext.lastExecutedOrder = lastOrder;
     analyzerContext.rendimiento = rendimiento;
-    analyzerContext.lastPrice = client.lastPrice || 0;
+    // lastPrice = price at the time of the most recent previous decision for this coin
+    analyzerContext.lastPrice = previousDecisionsBySymbol[snapshot.symbol]?.[0]?.price
+      || lastOrder?.price
+      || 0;
 
     // ── 4.2 Check for open orders (with FULL context) ────────────────
     // openOrders already fetched from fetchMarketData
@@ -259,6 +263,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
             reasoning: d.reasoning || '',
             risks: d.risks || '',
             positionPct: parseFloat(d.positionPct) || 0,
+            currentPrice: indicators[d.symbol.replace('/', '-')]?.currentPrice || null,
             usdAmount: parseFloat(d.usdAmount) || 0,
             orderType: d.orderType || 'market',
             takeProfit: d.takeProfit || null,
