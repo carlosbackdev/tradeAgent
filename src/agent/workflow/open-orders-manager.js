@@ -5,7 +5,7 @@
  */
 
 import { logger } from '../../utils/logger.js';
-import { saveOrder, saveDecision, markOrderCancelled } from '../../utils/mongodb.js';
+import { saveOrder, saveDecision, markOrderCancelled } from '../../services/mongo/mongo-service.js';
 import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
 import { OrderManager } from '../../revolut/orders.js';
 

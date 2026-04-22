@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import { runAgentCycle } from '../agent/executor.js';
 import { logger } from '../utils/logger.js';
 import { CronParse, formatInitMessage, formatStartMessage, formatStatsMessage, formatAskMessage, formatConfigMessage, formatPromptMessage, formatHelpMessage, formatAgentStatusMessage } from '../utils/formatter.js';
-import { getTradingStats, getTradingPerformance } from '../utils/mongodb.js';
+import { getTradingStats, getTradingPerformance } from '../services/mongo/mongo-service.js';
 import { RevolutClient } from '../revolut/client.js';
 import { MarketData } from '../revolut/market.js';
 import { config } from '../config/config.js';

@@ -5,7 +5,7 @@
 
 import { OrderManager } from '../../revolut/orders.js';
 import { notifyOrderExecuted, notifyError } from '../../telegram/handles.js';
-import { saveOrder, applySellToOpenLots } from '../../utils/mongodb.js';
+import { saveOrder, applySellToOpenLots } from '../../services/mongo/mongo-service.js';
 import { logger } from '../../utils/logger.js';
 import { getAvailableUsdReal, getAvailableCoinReal } from './available-balance.js';
 

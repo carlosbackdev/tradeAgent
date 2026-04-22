@@ -3,7 +3,7 @@
  * Builds the analyzer context for Claude with relevant data
  */
 
-import { getTradingPerformance } from '../../utils/mongodb.js';
+import { getTradingPerformance } from '../../services/mongo/mongo-service.js';
 import { logger } from '../../utils/logger.js';
 
 export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false, chatId = null, priceMap = {}, realAvailableBalances = null) {

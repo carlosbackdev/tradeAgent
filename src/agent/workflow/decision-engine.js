@@ -4,7 +4,7 @@
  */
 
 import { logger } from '../../utils/logger.js';
-import { getOpenPositionSummary } from '../../utils/mongodb.js';
+import { getOpenPositionSummary } from '../../services/mongo/mongo-service.js';
 
 export async function checkForcedDecisions(indicators, coin, balanceArray, realAvailableBalances, config, dbConnected = false, chatId = null) {
   let forcedDecision = null;

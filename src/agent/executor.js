@@ -16,7 +16,7 @@ import {
   getExecutedOrders,
   getDecisionById,
   getOpenPositionSummary
-} from '../utils/mongodb.js';
+} from '../services/mongo/mongo-service.js';
 import { callAgentAnalyzer } from './services/clientAgent.js';
 import { config } from '../config/config.js';
 
