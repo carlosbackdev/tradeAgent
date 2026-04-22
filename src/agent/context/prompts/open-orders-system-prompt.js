@@ -60,6 +60,8 @@ Scale positionPct by confidence:
   - confidence ${holdThreshold}–69 → positionPct ~${(maxPct * 0.2 / 100).toFixed(2)}
   - confidence < ${holdThreshold} → do NOT buy_more, prefer keep or cancel
 
+ Write "marketSummary", "reasoning" and "risks" in Spanish. All other fields in English.
+
 RESPONSE: strict JSON only, no markdown, no extra text:
 {
   "decisions": [
@@ -72,8 +74,8 @@ RESPONSE: strict JSON only, no markdown, no extra text:
       "takeProfit": null,
       "stopLoss": null,
       "confidence": 72,
-      "reasoning": "summary short reasoning for next analysis",
-      "risks": "Riesgos en español."
+      "reasoning": "summary short reasoning for next analysis in Spanish.",
+      "risks": "in spanish."
     }
   ],
   "marketSummary": "1-2 sentence market assessment in Spanish."

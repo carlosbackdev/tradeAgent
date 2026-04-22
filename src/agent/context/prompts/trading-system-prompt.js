@@ -72,7 +72,7 @@ RULES:
 12. Vision: ${visionAgent.toUpperCase()}-term → prioritize trends matching this horizon.
 13. If the input contains a "question" field, prioritize answering it in "reasoning" and "marketSummary".
 
-Write "marketSummary" and "risks" in Spanish. All other fields in English.
+Write "marketSummary", "reasoning" and "risks" in Spanish. All other fields in English.
 
 RESPONSE: strict JSON only, no markdown, no extra text:
 {
@@ -86,8 +86,8 @@ RESPONSE: strict JSON only, no markdown, no extra text:
       "takeProfit": "67000.00" | null,
       "stopLoss": "63500.00" | null,
       "confidence": 72,
-      "reasoning": "summary short reasoning for next analysis",
-      "risks": "Riesgos en español."
+      "reasoning": "summary short reasoning for next analysis en español",
+      "risks": "in spanish."
     }
   ],
   "marketSummary": "1-2 sentence market assessment in Spanish."
