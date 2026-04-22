@@ -45,6 +45,7 @@ export async function analyzeOpenOrderWithClaude(openOrder, analyzerContext, sym
       confidence: Math.max(0, Math.min(100, parseInt(payload.confidence) || 50)),
       positionPct: Math.max(0, Math.min(1, Number(payload.positionPct) || 0)),
       buy_more_quantity: Math.max(0, parseFloat(payload.buy_more_quantity ?? decision?.buy_more_quantity) || 0),
+      marketSummary: decision.marketSummary || '',
     };
 
   } catch (err) {

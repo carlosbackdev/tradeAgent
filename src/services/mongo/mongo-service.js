@@ -39,6 +39,7 @@ export async function saveDecision(decision, trigger = 'cron', chatId = null) {
     action: decision.action,
     confidence: decision.confidence,
     reasoning: decision.reasoning,
+    marketSummary: decision.marketSummary || null,
     risks: decision.risks,
     trigger,
     positionPct: decision.positionPct || null,

@@ -171,7 +171,7 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol, tradingC
         action: d.action.toUpperCase(),
         confidence: d.confidence,
         atPrice: d.price,
-        reasoning: d.reasoning || null,
+        marketSummary: d.marketSummary || d.reasoning || null,
       })) || [],
     },
 

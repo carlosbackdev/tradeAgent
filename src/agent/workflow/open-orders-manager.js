@@ -88,6 +88,7 @@ export async function processOpenOrders(
               confidence: analysis.confidence,
               reasoning: `Open order ${analysis.action}: ${analysis.reasoning}`,
               risks: `Open order management for ${orderId}`,
+              marketSummary: analysis.marketSummary || '',
               usdAmount: 0, // Open order decisions don't have USD amount
               orderType: 'market',
               takeProfit: null,
