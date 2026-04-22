@@ -56,6 +56,44 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
   return msg;
 }
 
+export function formatOpenOrdersMessage({ symbol, results }) {
+  let msg = `╔════════════════════════╗\n`;
+  msg += `      📋 <b>OPEN ORDERS</b>\n`;
+  msg += `╚════════════════════════╝\n`;
+  msg += `Símbolo: <b>${escapeHTML(symbol)}</b>\n\n`;
+
+  if (results.cancelledOrders?.length > 0) {
+    for (const order of results.cancelledOrders) {
+      msg += `🔴 <b>CANCELACIÓN</b> (ID: ${escapeHTML(String(order.id || '').slice(0, 8))}...)\n`;
+      msg += `  • <b>Confianza:</b> ${order.confidence}%\n`;
+      msg += `  • <b>Motivo:</b> <code>${escapeHTML(order.reason)}</code>\n\n`;
+    }
+  }
+
+  if (results.keptOrders?.length > 0) {
+    for (const order of results.keptOrders) {
+      msg += `🟡 <b>MANTENER</b> (ID: ${escapeHTML(String(order.id || '').slice(0, 8))}...)\n`;
+      msg += `  • <b>Confianza:</b> ${order.confidence}%\n`;
+      msg += `  • <b>Motivo:</b> <code>${escapeHTML(order.reason)}</code>\n\n`;
+    }
+  } else if ((results.kept || 0) > 0) {
+    msg += `⏳ Manteniendo <b>${results.kept}</b> orden(es) abierta(s) sin cambios.\n\n`;
+  }
+
+  if (results.buyMoreOrders?.length > 0) {
+    for (const order of results.buyMoreOrders) {
+      msg += `🟢 <b>COMPRA ADICIONAL</b> (Cant: ${order.quantity})\n`;
+      msg += `  • ID: ${escapeHTML(String(order.id || '').slice(0, 8))}...\n`;
+      msg += `  • <b>Motivo:</b> <code>${escapeHTML(order.reason)}</code>\n\n`;
+    }
+  }
+
+  msg += `━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `✅ <b>Procesadas:</b> ${results.cancelled || 0} canceladas, ${results.buy_more_count || 0} buy_more, ${results.kept || 0} mantenidas`;
+
+  return msg;
+}
+
 export function formatInitMessage({ username, cronStatus, mode, pairs }) {
   const display = username ? ' <b>@' + escapeHTML(username) + '</b>' : '';
   const cronDesc = cronStatus.enabled ? `✅ <code>${CronParse(cronStatus.schedule)}</code>` : '⏸️ <i>desactivado</i>';

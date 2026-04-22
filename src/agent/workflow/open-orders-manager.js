@@ -5,10 +5,8 @@
  */
 
 import { logger } from '../../utils/logger.js';
-import { notify } from '../../telegram/handles.js';
 import { saveOrder, saveDecision, markOrderCancelled } from '../../utils/mongodb.js';
 import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
-import { escapeHTML } from '../../utils/formatter.js';
 import { OrderManager } from '../../revolut/orders.js';
 
 /**
@@ -61,7 +59,8 @@ export async function processOpenOrders(
       kept: 0,
       buy_more_count: 0,
       cancelledOrders: [],
-      executedOrders: [],
+      keptOrders: [],
+      buyMoreOrders: [],
       errors: [],
     };
 
@@ -225,11 +224,11 @@ export async function processOpenOrders(
                 }
               }
 
-              results.executedOrders.push({
+              results.buyMoreOrders.push({
                 id: newOrder.id,
-                type: 'buy_more',
                 quantity: buyQuantity,
-                decision_id: decisionId,
+                reason: analysis.reasoning,
+                confidence: analysis.confidence,
               });
             }
           } catch (buyErr) {
@@ -243,7 +242,7 @@ export async function processOpenOrders(
           // KEEP order as-is
           logger.info(`⏳ Keeping order ${orderId} (confidence: ${analysis.confidence}%)`);
           results.kept++;
-          results.executedOrders.push({
+          results.keptOrders.push({
             id: orderId,
             type: 'keep',
             reason: analysis.reasoning,
@@ -256,51 +255,10 @@ export async function processOpenOrders(
       }
     }
 
-    // ── Send Telegram Notification ─────────────────────────────────
-    if (results.found > 0) {
-      let summaryMessage = `╔════════════════════════╗\n`;
-      summaryMessage += `      📋 <b>OPEN ORDERS</b>\n`;
-      summaryMessage += `╚════════════════════════╝\n`;
-      summaryMessage += `Símbolo: <b>${symbol}</b>\n\n`;
-
-      for (const order of results.cancelledOrders) {
-        summaryMessage += `🔴 <b>CANCELACIÓN</b> (ID: ${order.id.slice(0, 8)}...)\n`;
-        summaryMessage += `  • <b>Confianza:</b> ${order.confidence}%\n`;
-        summaryMessage += `  • <b>Motivo:</b> <code>${escapeHTML(order.reason)}</code>\n\n`;
-      }
-
-      for (const order of results.executedOrders) {
-        if (order.type === 'buy_more') {
-          summaryMessage += `🟢 <b>COMPRA ADICIONAL</b> (Cant: ${order.quantity})\n`;
-          summaryMessage += `  • ID: ${order.id.slice(0, 8)}...\n`;
-          summaryMessage += `  • <b>Motivo:</b> <code>${escapeHTML(order.reason)}</code>\n\n`;
-        }
-      }
-
-      if (results.kept > 0) {
-        summaryMessage += `⏳ Manteniendo <b>${results.kept}</b> orden(es) abierta(s) sin cambios.\n`;
-      }
-
-      summaryMessage += `━━━━━━━━━━━━━━━━━━━━\n`;
-
-      try {
-        await notify(summaryMessage, chatId);
-        logger.info('📤 Open orders Telegram notification sent');
-      } catch (notifyErr) {
-        logger.warn(`⚠️ Failed to send Telegram notification: ${notifyErr.message}`);
-      }
-    }
-
     logger.info(`📊 Summary: ${results.cancelled} cancelled, ${results.kept} kept, ${results.buy_more_count} buy_more`);
     return results;
   } catch (err) {
     logger.error(`❌ Open orders processing failed: ${err.message}`);
-
-    try {
-      await notify(`❌ *Open Orders Error* (${symbol}): ${err.message}`, chatId);
-    } catch (notifyErr) {
-      logger.warn(`⚠️ Failed to send error notification: ${notifyErr.message}`);
-    }
 
     return {
       symbol,

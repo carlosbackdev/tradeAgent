@@ -5,7 +5,7 @@
 
 import { computeIndicators, closesFromCandles } from './context/indicators.js';
 import { notify, notifyError } from '../telegram/handles.js';
-import { formatDecision } from '../utils/formatter.js';
+import { formatDecision, formatOpenOrdersMessage } from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
 import {
   connectDB,
@@ -235,7 +235,13 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       }
 
       logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
-      await notify(`✅ *${coin}*: Processed open orders (${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept).`, chatId).catch(() => { });
+      try {
+        const openOrdersMessage = formatOpenOrdersMessage({ symbol: coin, results: processResult });
+        await notify(openOrdersMessage, chatId);
+        logger.info('📤 Open orders Telegram notification sent');
+      } catch (err) {
+        logger.warn(`⚠️ Failed to send open orders notification: ${err.message}`);
+      }
       return {
         decision: null,
         execResults: [],
