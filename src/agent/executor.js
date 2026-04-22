@@ -18,6 +18,7 @@ import {
   getOpenPositionSummary
 } from '../services/mongo/mongo-service.js';
 import { callAgentAnalyzer } from './services/clientAgent.js';
+import { buildAnalyzerMessage } from './context/analyzer-market.js';
 import { config } from '../config/config.js';
 
 // Import workflow modules
@@ -132,7 +133,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       dbConnected,
       chatId
     );
-    rendimiento = calculatedRendimiento;
+    const fifoRendimiento = Number(openPositionSummary?.unrealizedRoiPct);
+    rendimiento = Number.isFinite(fifoRendimiento) ? fifoRendimiento : calculatedRendimiento;
 
     // ── 4. Build context for Claude (EARLY - needed for open order analysis) ──
     const previousDecisionsBySymbol = {};
@@ -187,7 +189,6 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     // openOrders already fetched from fetchMarketData
     const normalizedCoin = coin.replace('/', '-');
     const baseCurrency = normalizedCoin.split('-')[0];
-    const coinBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
 
     // Ensure openOrders is an array
     const ordersArray = Array.isArray(openOrders) ? openOrders : [];
@@ -272,7 +273,13 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       };
     }
 
-    logger.info('Analyzer context:', JSON.stringify(analyzerContext, null, 2));
+    // Build the Claude context only with open orders for this coin.
+    const analyzerContextForClaude = {
+      ...analyzerContext,
+      openOrders: openOrdersThisCoin,
+    };
+    const claudePayload = buildAnalyzerMessage(analyzerContextForClaude, question, effectiveConfig.trading);
+
     logger.info('Forced decision:', JSON.stringify(forcedDecision, null, 2));
 
     // ── 5. Get Claude decision or use forced decision ──────────────
@@ -283,7 +290,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     } else {
       try {
         const anthConfig = effectiveConfig.anthropic;
-        decision = await callAgentAnalyzer(analyzerContext, question, anthConfig.apiKey, anthConfig.model, effectiveConfig.trading);
+        decision = await callAgentAnalyzer(claudePayload, anthConfig.apiKey, anthConfig.model, effectiveConfig.trading);
         logger.info('✅ Claude decision received');
         logger.debug('Decision:', JSON.stringify(decision, null, 2));
       } catch (err) {

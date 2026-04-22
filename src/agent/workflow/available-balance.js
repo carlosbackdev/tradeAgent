@@ -1,6 +1,6 @@
 /**
  * workflow/available-balance.js
- * Computes real available balances by discounting funds locked in open limit orders.
+ * Computes real available balances by discounting funds locked in active open orders.
  */
 
 function toNumber(value, fallback = 0) {
@@ -63,7 +63,7 @@ export function calculateReservedFromOpenLimitOrders(openOrders = []) {
 
   for (const order of ordersArray) {
     const orderType = getOrderType(order);
-    if (orderType !== 'limit') continue;
+    if (!orderType) continue;
 
     const side = String(order?.side || '').toLowerCase();
     const normalizedSymbol = toUpperSymbol(order?.symbol);

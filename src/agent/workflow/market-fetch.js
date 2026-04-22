@@ -18,7 +18,7 @@ export async function fetchMarketData(coin, config) {
 
   const [balances, openOrders, snapshot] = await Promise.all([
     market.getBalances(),
-    market.getOpenOrders([coin]),
+    market.getOpenOrders(),
     market.getSnapshot(coin),
   ]).catch(err => {
     throw new Error(`Failed to fetch market data: ${err.message}`);

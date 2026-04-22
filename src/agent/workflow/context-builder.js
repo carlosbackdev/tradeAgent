@@ -106,6 +106,25 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
       }
     }
 
+    const normalizedSymbol = String(snapshot.symbol || '').replace('/', '-');
+    const indicatorSnapshot = indicators[normalizedSymbol] || {};
+    const normalizedIndicators = normalizeIndicatorSnapshot(indicatorSnapshot);
+    const atrValue = Number(last30Data.volatilityATR || 0);
+    const currentPrice = Number(normalizedIndicators.currentPrice || snapshot.ticker?.last || 0);
+    const atrPctOfPrice = (atrValue > 0 && currentPrice > 0)
+      ? Number(((atrValue / currentPrice) * 100).toFixed(3))
+      : null;
+    const latestMovePct = changesPercent.length > 0
+      ? Number(changesPercent[changesPercent.length - 1])
+      : null;
+    const volatilityRegime = classifyVolatilityRegime(atrPctOfPrice);
+    const moveSignificance = classifyMoveSignificance(latestMovePct, atrPctOfPrice);
+    const regimeSummary = buildRegimeSummary(normalizedIndicators, {
+      latestMovePct,
+      totalChangePct: last30Data.totalChangePct,
+      volatilityRegime
+    });
+
     return {
       symbol: snapshot.symbol,
       ticker: snapshot.ticker,
@@ -120,6 +139,13 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
         allCandles: allCandlesData,
         last30: last30Data,
       },
+      atr: {
+        atr_value: atrValue || null,
+        atr_pct_of_price: atrPctOfPrice,
+        volatility_regime: volatilityRegime,
+        move_significance: moveSignificance,
+      },
+      regimeSummary,
       fetchedAt: snapshot.fetchedAt,
     };
   });
@@ -133,7 +159,62 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
     openPositions: (tradingStats.openPositions || []).filter(p => p.totalCost >= 1),
   } : null;
 
+  const exchangeTruth = {
+    balances,
+    openOrders: openOrdersArray,
+    marketBySymbol: compactPairs.reduce((acc, pair) => {
+      const symbol = String(pair.symbol || '').replace('/', '-');
+      acc[symbol] = {
+        ticker: pair.ticker || null,
+        currentPrice: pair.ticker?.last ?? null,
+        orderBookTop: pair.orderBookTop || null,
+        fetchedAt: pair.fetchedAt || null,
+      };
+      return acc;
+    }, {}),
+  };
+
+  const botState = {
+    openLots: tradingStatsForClaude?.openPositions || [],
+    recentSells: [],
+    lastExecutedOrder: null,
+    rendimiento: null,
+    rendimientoAcumulado: tradingStatsForClaude?.accumulatedRendimiento ?? null,
+    tradingStats: tradingStatsForClaude,
+    managedPositions: tradingStatsForClaude?.openPositions || [],
+  };
+
+  const decisionContext = {
+    indicators,
+    regimeSummary: compactPairs.reduce((acc, pair) => {
+      const symbol = String(pair.symbol || '').replace('/', '-');
+      acc[symbol] = pair.regimeSummary || null;
+      return acc;
+    }, {}),
+    atrContext: compactPairs.reduce((acc, pair) => {
+      const symbol = String(pair.symbol || '').replace('/', '-');
+      acc[symbol] = pair.atr || null;
+      return acc;
+    }, {}),
+    recentMarketContext: compactPairs.reduce((acc, pair) => {
+      const symbol = String(pair.symbol || '').replace('/', '-');
+      acc[symbol] = {
+        timeframeMinutes: pair.recentClosesContext?.timeframeMinutes || null,
+        allCandles: pair.recentClosesContext?.allCandles || null,
+        last30: pair.recentClosesContext?.last30 || null,
+      };
+      return acc;
+    }, {}),
+    previousDecisions: {},
+    currentPrice: null,
+    lastPrice: null,
+    priceChangeSinceLastAnalysisPct: 0,
+  };
+
   const analyzerContext = {
+    exchangeTruth,
+    botState,
+    decisionContext,
     balances: relevantBalances,
     openOrders: openOrdersArray,
     pairs: compactPairs,
@@ -145,6 +226,111 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
   };
 
   return analyzerContext;
+}
+
+function toNumber(value, fallback = null) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function parsePercentString(value) {
+  if (value === null || value === undefined) return null;
+  const clean = String(value).replace('%', '');
+  const n = Number(clean);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeIndicatorSnapshot(ind = {}) {
+  return {
+    currentPrice: toNumber(ind.currentPrice, 0),
+    rsi14: toNumber(ind.rsi14),
+    sma20: toNumber(ind.sma20),
+    ema12: toNumber(ind.ema12),
+    ema26: toNumber(ind.ema26),
+    macdLine: toNumber(ind.macdLine),
+    macdSignal: toNumber(ind.macdSignal),
+    macdHistogram: toNumber(ind.macdHistogram),
+    bbUpper: toNumber(ind.bbUpper),
+    bbMiddle: toNumber(ind.bbMiddle ?? ind.bbMid),
+    bbLower: toNumber(ind.bbLower),
+    bbWidthPct: parsePercentString(ind.bbWidth),
+    bbPositionPct: parsePercentString(ind.bbPosition),
+    confluence: ind.confluence || null,
+  };
+}
+
+function classifyVolatilityRegime(atrPctOfPrice) {
+  if (atrPctOfPrice === null || atrPctOfPrice === undefined) return 'medium';
+  if (atrPctOfPrice < 0.8) return 'low';
+  if (atrPctOfPrice > 2.2) return 'high';
+  return 'medium';
+}
+
+function classifyMoveSignificance(latestMovePct, atrPctOfPrice) {
+  if (latestMovePct === null || atrPctOfPrice === null || atrPctOfPrice <= 0) return 'normal';
+  const ratio = Math.abs(latestMovePct) / atrPctOfPrice;
+  if (ratio < 0.5) return 'small';
+  if (ratio > 1.5) return 'large';
+  return 'normal';
+}
+
+function buildRegimeSummary(ind, marketCtx) {
+  const bullishTrend = (ind.ema12 !== null && ind.ema26 !== null && ind.ema12 > ind.ema26)
+    + (ind.currentPrice !== null && ind.ema12 !== null && ind.currentPrice > ind.ema12);
+  const bearishTrend = (ind.ema12 !== null && ind.ema26 !== null && ind.ema12 < ind.ema26)
+    + (ind.currentPrice !== null && ind.ema12 !== null && ind.currentPrice < ind.ema12);
+
+  let trendRegime = 'neutral';
+  if (bullishTrend >= 2) trendRegime = 'bullish';
+  else if (bearishTrend >= 2) trendRegime = 'bearish';
+
+  const macdHist = ind.macdHistogram;
+  const rsi = ind.rsi14;
+  let momentumRegime = 'mixed';
+  if ((macdHist !== null && macdHist > 0) && (rsi !== null && rsi >= 50)) momentumRegime = 'improving';
+  else if ((macdHist !== null && macdHist < 0) && (rsi !== null && rsi < 50)) momentumRegime = 'weakening';
+
+  const volatilityRegime = marketCtx.volatilityRegime || 'medium';
+  const bbPos = ind.bbPositionPct;
+  const latestMove = marketCtx.latestMovePct;
+  const totalChange = marketCtx.totalChangePct;
+
+  let marketStructure = 'unclear';
+  if (bbPos !== null && (bbPos > 85 || bbPos < 15) && latestMove !== null && Math.abs(latestMove) > 0.6) {
+    marketStructure = 'breakout';
+  } else if (bbPos !== null && bbPos >= 35 && bbPos <= 65) {
+    marketStructure = 'range';
+  } else if (trendRegime !== 'neutral' && latestMove !== null && Math.sign(latestMove) !== 0) {
+    const continuation = (trendRegime === 'bullish' && latestMove > 0) || (trendRegime === 'bearish' && latestMove < 0);
+    const counterMove = (trendRegime === 'bullish' && latestMove < 0) || (trendRegime === 'bearish' && latestMove > 0);
+    if (continuation) marketStructure = 'trend_continuation';
+    else if (counterMove) marketStructure = 'pullback';
+  }
+
+  let signalQuality = 'mixed';
+  const confluenceSuggestion = ind.confluence?.suggestion || 'NEUTRAL';
+  if (trendRegime === 'bullish' && momentumRegime === 'improving' && confluenceSuggestion === 'BUY_SIGNAL') {
+    signalQuality = 'strong_bullish';
+  } else if (trendRegime === 'bullish' || confluenceSuggestion === 'BUY_SIGNAL') {
+    signalQuality = 'moderate_bullish';
+  } else if (trendRegime === 'bearish' && momentumRegime === 'weakening' && confluenceSuggestion === 'SELL_SIGNAL') {
+    signalQuality = 'strong_bearish';
+  } else if (trendRegime === 'bearish' || confluenceSuggestion === 'SELL_SIGNAL') {
+    signalQuality = 'moderate_bearish';
+  }
+
+  // A strong directional move in last30 reinforces signal quality one step without changing sign.
+  if (totalChange !== null && Math.abs(totalChange) > 4 && signalQuality === 'mixed') {
+    signalQuality = totalChange > 0 ? 'moderate_bullish' : 'moderate_bearish';
+  }
+
+  return {
+    trend_regime: trendRegime,
+    momentum_regime: momentumRegime,
+    volatility_regime: volatilityRegime,
+    market_structure: marketStructure,
+    signal_quality: signalQuality,
+  };
 }
 
 function calculateATR(candles, period = 14) {

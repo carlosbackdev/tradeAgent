@@ -3,9 +3,8 @@
  * agent/context/prompt.js
  * System prompt and Anthropic client for the analyzer.
 */
-import { getSystemPrompt } from '../context/prompts/trading-system-prompt.js';
 import Anthropic from '@anthropic-ai/sdk';
-import { buildAnalyzerMessage } from '../context/analyzer-market.js';
+import { getSystemPrompt } from '../context/prompts/trading-system-prompt.js';
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config/config.js';
 
@@ -49,9 +48,10 @@ export function parseClaudeJsonResponse(raw) {
 export async function callClaudeWithCustomPrompt(userMessage, apiKey = null, model = null, tradingConfig = null, systemPrompt = null) {
   const effectiveSystemPrompt = systemPrompt || getSystemPrompt(tradingConfig || config.trading);
   const effectiveModel = model || config.anthropic.model;
-  const effectiveApiKey = apiKey || config.anthropic.apiKey;
+  const hasExplicitApiKey = apiKey !== null && apiKey !== undefined;
+  const effectiveApiKey = hasExplicitApiKey ? String(apiKey).trim() : (config.anthropic.apiKey || '');
 
-  if (!effectiveApiKey) {
+  if (!effectiveApiKey || !effectiveApiKey.startsWith('sk-')) {
     throw new Error('No Anthropic API Key provided');
   }
 
@@ -72,8 +72,8 @@ export async function callClaudeWithCustomPrompt(userMessage, apiKey = null, mod
   return parseClaudeJsonResponse(raw);
 }
 
-export async function callAgentAnalyzer(context, question, apiKey = null, model = null, tradingConfig = null) {
-  let userMessage = buildAnalyzerMessage(context, question);
+export async function callAgentAnalyzer(userMessage, apiKey = null, model = null, tradingConfig = null) {
+  logger.info(`📨 MAIN ANALYZER → Claude payload (3-layer):\n${userMessage}`);
   return callClaudeWithCustomPrompt(userMessage, apiKey, model, tradingConfig);
 }
 

@@ -178,10 +178,14 @@ export async function processOpenOrders(
         } else if (analysis.action === 'buy_more') {
           // Place additional BUY order
           logger.info(`📈 Placing BUY_MORE for ${symbol} (Claude confidence: ${analysis.confidence}%)`);
-          const buyQuantity = analysis.buy_more_quantity || (order.quantity || (order.base_size || 0));
 
           try {
             const currentPrice = analyzerContext.indicators?.[symbol.replace('/', '-')]?.currentPrice || 0;
+            const availableUsd = Number(analyzerContext.balances?.fiat?.USD || 0);
+            const qtyFromPct = (analysis.positionPct > 0 && currentPrice > 0)
+              ? (availableUsd * analysis.positionPct / currentPrice)
+              : 0;
+            const buyQuantity = analysis.buy_more_quantity || qtyFromPct || (order.quantity || (order.base_size || 0));
             const buyAmount = Number(buyQuantity) * Number(currentPrice);
 
             const newOrder = await orderManager.placeOrder({

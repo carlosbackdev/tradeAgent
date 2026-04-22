@@ -93,9 +93,21 @@ export class UserSession {
   // ── Config management ──────────────────────────────────────────
 
   updateConfig(key, value) {
+    const normalizedValue = typeof value === 'string' ? value.trim() : value;
+
+    if (key === 'ANTHROPIC_API_KEY') {
+      const apiKey = String(normalizedValue || '');
+      if (!apiKey || apiKey.length < 10 || !apiKey.startsWith('sk-')) {
+        this._send(`❌ <b>ANTHROPIC_API_KEY inválida</b>
+
+La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode: 'HTML' }).catch(() => {});
+        return false;
+      }
+    }
+
     // Update in-memory
     const cfg = this.user.config || {};
-    cfg[key] = value;
+    cfg[key] = normalizedValue;
     this.user.config = cfg;
 
     // Rebuild trading/debug/etc sub-objects
@@ -117,17 +129,25 @@ export class UserSession {
     } else if (key === 'INDICATORS_CANDLES_INTERVAL') {
       this.userConfig.indicators.candlesInterval = parseNum(value, 15);
     } else if (key === 'ANTHROPIC_MODEL') {
-      this.userConfig.anthropic.model = value;
+      this.userConfig.anthropic.model = normalizedValue;
+    } else if (key === 'ANTHROPIC_API_KEY') {
+      this.userConfig.anthropic.apiKey = normalizedValue;
+    } else if (key === 'REVOLUT_API_KEY') {
+      this.userConfig.revolut.apiKey = normalizedValue;
+    } else if (key === 'REVOLUT_BASE_URL') {
+      this.userConfig.revolut.baseUrl = normalizedValue;
+    } else if (key === 'REVOLUT_PRIVATE_KEY_PATH') {
+      this.userConfig.revolut.privateKeyPath = normalizedValue;
     } else if (key === 'DRY_RUN') {
-      this.userConfig.debug.dryRun = value === 'true';
+      this.userConfig.debug.dryRun = normalizedValue === 'true';
     } else if (key === 'CRON_SCHEDULE') {
-      this.userConfig.cron.schedule = value;
+      this.userConfig.cron.schedule = normalizedValue;
     } else if (key === 'CRON_ENABLED') {
-      this.userConfig.cron.enabled = value === 'true';
+      this.userConfig.cron.enabled = normalizedValue === 'true';
     }
 
     // Persist to MongoDB
-    updateUserConfig(this.userId, { [key]: value }).catch(err =>
+    updateUserConfig(this.userId, { [key]: normalizedValue }).catch(err =>
       logger.warn(`Failed to persist config for user ${this.userId}: ${err.message}`)
     );
     return true;
