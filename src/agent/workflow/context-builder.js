@@ -69,6 +69,7 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
       lastVelaTime: null,
       totalChangePct: 0,
       durationRange: '—',
+      candleIntervalMinutes: snapshot.candles?.interval || 5,
       changesPercent,
       volatilityATR: null,
       recentVolumes: [],

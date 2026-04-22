@@ -16,10 +16,24 @@ export async function fetchMarketData(coin, config) {
   const client = new RevolutClient(config);
   const market = new MarketData(client);
 
-  const [balances, openOrders, snapshot] = await Promise.all([
+  const HIGHER_TF_MAP = {
+    5:    60,    // 5 min  → 1 hora
+    15:   240,   // 15 min → 4 horas
+    30:   240,   // 30 min → 4 horas
+    60:   240,   // 1 hora → 4 horas
+    240:  1440,  // 4 horas → 1 día
+    720:  1440,  // 12 horas → 1 día
+    1440: null,  // 1 día → no hay superior
+  };
+
+  const baseInterval = config.indicators.candlesInterval;
+  const higherInterval = HIGHER_TF_MAP[baseInterval] ?? null;
+
+  const [balances, openOrders, snapshot, higherTfCandles] = await Promise.all([
     market.getBalances(),
     market.getOpenOrders(),
     market.getSnapshot(coin),
+    higherInterval ? market.getCandles(coin, { interval: higherInterval }) : Promise.resolve(null),
   ]).catch(err => {
     throw new Error(`Failed to fetch market data: ${err.message}`);
   });
@@ -75,6 +89,8 @@ export async function fetchMarketData(coin, config) {
     balanceArray,
     openOrders: ordersArray,
     snapshot,
+    higherTfCandles,
+    higherTfInterval: higherInterval,
     priceMap,
     realAvailableBalances,
     eurBalance,

@@ -35,6 +35,8 @@ Priority inside botState: openLots is the primary live position source of truth.
 - regimeSummary: Market regime by symbol
 - atrContext: ATR values per symbol
 - recentMarketContext: Candle history and timeframe data
+- higherTimeframe: Macro trend context 
+— entry decisions should align with this (optional)
 - previousDecisions: Recent decision history to avoid flip-flopping
 - constraints: Trading limits (MAX_TRADE_SIZE, MIN_ORDER, etc.)
 

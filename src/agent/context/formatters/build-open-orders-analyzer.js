@@ -83,6 +83,7 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
       TAKE_PROFIT_PCT: Number(tradingConfig?.takeProfitPct ?? 0),
       STOP_LOSS_PCT: Number(tradingConfig?.stopLossPct ?? 0),
     },
+    higherTimeframe: analyzerContext.higherTimeframe || null,
     trading_history: analyzerContext.previousDecisions?.[normalizedSymbol] || analyzerContext.previousDecisions?.[symbol] || [],
     open_lots: analyzerContext.openLots || [],
   };
@@ -129,6 +130,7 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol, tradingC
     open_lots,
     usd_available,
     rendimiento_pct,
+    higherTimeframe,
   } = openOrderContext;
 
   const placedAtPrice = toNumber(open_order.placed_at_price, 0);
@@ -175,6 +177,7 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol, tradingC
 
     decisionContext: {
       technical_indicators: indicators_snapshot,
+      higherTimeframe,
       order_age_assessment: orderAgeAssessment,
       spread_assessment: spread_pct
         ? (spread_pct < 0.1 ? 'Tight' : spread_pct < 0.3 ? 'Normal' : 'Wide')

@@ -23,6 +23,7 @@ You receive data in THREE LAYERS:
 
 **decisionContext**: Technical analysis + constraints
 - technical_indicators: RSI, MACD, EMAs, Bollinger Bands
+- higherTimeframe: Macro trend context — entry decisions should align with this (optional)
 - order_age_assessment: Is this a fresh or stale order?
 - spread_assessment: Is the market tight or wide?
 - constraints: Rules for decision-making

@@ -51,6 +51,7 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
     },
     decisionContext: {
       indicators: normalizedIndicatorsBySymbol,
+      higherTimeframe: context.higherTimeframe || null,
       regimeSummary: regimeSummaryBySymbol,
       atrContext: atrBySymbol,
       recentMarketContext: recentMarketContextBySymbol,

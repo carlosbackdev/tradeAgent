@@ -48,7 +48,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     }
 
     // ── 1. Fetch market data ───────────────────────────────────────
-    const { client, market, balances, balanceArray, openOrders, snapshot, priceMap, realAvailableBalances } = await fetchMarketData(coin, effectiveConfig);
+    const { client, market, balances, balanceArray, openOrders, snapshot, higherTfCandles, higherTfInterval, priceMap, realAvailableBalances } = await fetchMarketData(coin, effectiveConfig);
 
     // ── 2. Compute indicators (EARLY - needed for open order analysis) ──
     const indicators = {};
@@ -73,6 +73,24 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     if (Object.keys(indicators).length === 0) {
       throw new Error('No valid indicators computed — not enough historical data');
+    }
+
+    let higherTfIndicators = null;
+    if (higherTfCandles?.candles?.length >= 26) {
+      const htfCloses  = closesFromCandles(higherTfCandles.candles);
+      const htfComputed = computeIndicators(htfCloses);
+      if (!htfComputed.error) {
+        higherTfIndicators = {
+          interval: higherTfInterval,
+          rsi14:      htfComputed.rsi14,
+          macdHistogram: htfComputed.macdHistogram,
+          bbPosition: htfComputed.bbPosition,
+          ema12:      htfComputed.ema12,
+          ema26:      htfComputed.ema26,
+          confluence: htfComputed.confluence,
+        };
+        logger.debug(`📈 Higher TF (${higherTfInterval}m) indicators computed for ${coin}`);
+      }
     }
 
     // ── 3. Fetch open lots and check SL/TP (EARLY) ──────────────────
@@ -184,6 +202,16 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     analyzerContext.priceChangeSinceLastAnalysisPct = (lastPrice > 0 && currentPrice > 0)
       ? parseFloat(((currentPrice - lastPrice) / lastPrice * 100).toFixed(2))
       : 0;
+
+    if (higherTfIndicators) {
+      analyzerContext.higherTimeframe = {
+        interval: `${higherTfIndicators.interval}min`,
+        confluence: higherTfIndicators.confluence,
+        rsi14: higherTfIndicators.rsi14,
+        bbPosition: higherTfIndicators.bbPosition,
+        note: "Macro trend context — entry decisions should align with this"
+      };
+    }
 
     // ── 4.2 Check for open orders (with FULL context) ────────────────
     // openOrders already fetched from fetchMarketData
