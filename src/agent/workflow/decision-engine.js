@@ -6,13 +6,13 @@
 import { logger } from '../../utils/logger.js';
 import { getOpenPositionSummary } from '../../utils/mongodb.js';
 
-export async function checkForcedDecisions(indicators, coin, balanceArray, config, dbConnected = false, chatId = null) {
+export async function checkForcedDecisions(indicators, coin, balanceArray, realAvailableBalances, config, dbConnected = false, chatId = null) {
   let forcedDecision = null;
   let rendimiento = null;
 
   if (dbConnected) {
     const baseCurrency = coin.split('-')[0];
-    const baseBalance = parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
+    const baseBalance = parseFloat(realAvailableBalances?.availableByCurrency?.[baseCurrency] || 0);
 
     // Only consider forcing SL/TP if we actually hold the asset
     if (baseBalance > 0) {
@@ -51,7 +51,7 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, confi
         }
       }
     } else {
-      logger.info(`ℹ️  No ${baseCurrency} balance — no SL/TP forced.`);
+      logger.info(`ℹ️  No disponible ${baseCurrency} balance — no SL/TP forced.`);
     }
   }
 

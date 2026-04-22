@@ -6,6 +6,7 @@
 import { RevolutClient } from '../../revolut/client.js';
 import { MarketData } from '../../revolut/market.js';
 import { logger } from '../../utils/logger.js';
+import { buildRealAvailableBalances } from './available-balance.js';
 
 export async function fetchMarketData(coin, config) {
   if (!coin) throw new Error('No trading pair passed to fetchMarketData');
@@ -56,8 +57,10 @@ export async function fetchMarketData(coin, config) {
     logger.warn(`⚠️ Unexpected openOrders format: ${typeof openOrders}. Expected array or object with .data or .orders`);
   }
 
+  const realAvailableBalances = buildRealAvailableBalances(balanceArray, ordersArray);
+
   const eurBalance = parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
-  const usdBalance = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
+  const usdBalance = parseFloat(realAvailableBalances.availableByCurrency.USD || 0);
   const totalFiat = eurBalance + usdBalance;
 
   if (totalFiat < config.trading.minOrderUsd) {
@@ -73,6 +76,7 @@ export async function fetchMarketData(coin, config) {
     openOrders: ordersArray,
     snapshot,
     priceMap,
+    realAvailableBalances,
     eurBalance,
     usdBalance,
     totalFiat,

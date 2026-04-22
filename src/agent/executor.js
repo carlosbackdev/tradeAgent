@@ -47,7 +47,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     }
 
     // ── 1. Fetch market data ───────────────────────────────────────
-    const { client, market, balances, balanceArray, openOrders, snapshot, priceMap } = await fetchMarketData(coin, effectiveConfig);
+    const { client, market, balances, balanceArray, openOrders, snapshot, priceMap, realAvailableBalances } = await fetchMarketData(coin, effectiveConfig);
 
     // ── 2. Compute indicators (EARLY - needed for open order analysis) ──
     const indicators = {};
@@ -127,6 +127,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       indicators[snapshot.symbol],
       coin,
       balanceArray,
+      realAvailableBalances,
       effectiveConfig,
       dbConnected,
       chatId
@@ -161,7 +162,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       snapshots,
       dbConnected,
       chatId,
-      priceMap
+      priceMap,
+      realAvailableBalances
     );
 
     // Merge previous decisions and open position context
@@ -245,7 +247,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     // ── 4.3 Guard: no funds and no position for this coin ───────────
     const minOrderUsd = effectiveConfig.trading.minOrderUsd;
-    let availableMoney = parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
+    let availableMoney = parseFloat(realAvailableBalances?.availableByCurrency?.USD || 0);
     availableMoney += parseFloat(balanceArray.find(b => b.currency === 'EUR')?.total || 0);
     const hasFundsToBuy = availableMoney >= minOrderUsd;
 
@@ -320,6 +322,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       decision.decisions,
       coin,
       balanceArray,
+      openOrders,
+      realAvailableBalances,
       indicators,
       effectiveConfig,
       rendimiento,

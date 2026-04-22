@@ -6,13 +6,13 @@
 import { getTradingPerformance } from '../../utils/mongodb.js';
 import { logger } from '../../utils/logger.js';
 
-export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false, chatId = null, priceMap = {}) {
+export async function buildAnalyzerContext(balances, openOrders, indicators, coin, snapshots, dbConnected = false, chatId = null, priceMap = {}, realAvailableBalances = null) {
   // Build trading stats FIRST using actual physical balances to cap any inconsistencies
   const tradingStats = dbConnected ? await getTradingPerformance(chatId, balances) : null;
 
   // Extract relevant balances, masking crypto with bot-managed positions (Option B)
   const managedPositions = tradingStats?.openPositions || [];
-  const relevantBalances = extractRelevantBalances(balances, indicators, priceMap, managedPositions);
+  const relevantBalances = extractRelevantBalances(balances, indicators, priceMap, managedPositions, realAvailableBalances);
 
   // Extract open orders array (handle both formats)
   const openOrdersArray = Array.isArray(openOrders?.data)
@@ -172,7 +172,7 @@ function calculateATR(candles, period = 14) {
   return parseFloat(atr.toFixed(4));
 }
 
-function extractRelevantBalances(balances, indicators = {}, priceMap = {}, managedPositions = []) {
+function extractRelevantBalances(balances, indicators = {}, priceMap = {}, managedPositions = [], realAvailableBalances = null) {
   if (!balances) return {};
 
   const structured = {
@@ -186,6 +186,7 @@ function extractRelevantBalances(balances, indicators = {}, priceMap = {}, manag
 
   let totalCryptoUSD = 0;
   let totalUSD = 0;
+  const availableMap = realAvailableBalances?.availableByCurrency || {};
 
   for (const b of balanceArray) {
     const total = Number(b.total || 0);
@@ -193,9 +194,9 @@ function extractRelevantBalances(balances, indicators = {}, priceMap = {}, manag
     if (total === 0) continue;
 
     if (fiatCurrencies.includes(b.currency)) {
-      // Apply a 0.5% safety margin to USD (keep 0.5%, use 99.5%)
+      // USD uses real available amount (total minus reserved in open BUY limits)
       const fiatAmount = b.currency === 'USD'
-        ? parseFloat((total * 0.995).toFixed(2))
+        ? Number(availableMap.USD ?? total)
         : total;
       structured.fiat[b.currency] = fiatAmount;
       if (b.currency === 'USD') totalUSD = fiatAmount;
@@ -203,17 +204,21 @@ function extractRelevantBalances(balances, indicators = {}, priceMap = {}, manag
       // Option B masking: only include crypto if the bot manages it
       const managedPos = managedPositions.find(p => p.symbol.startsWith(b.currency + '-'));
       const botQty = managedPos ? managedPos.qty : 0;
-      
-      if (botQty <= 0) continue;
+
+      // Sellable qty is capped by real available balance (excludes qty reserved in SELL limit orders)
+      const realAvailableQty = Number(availableMap[b.currency] ?? botQty);
+      const sellableQty = Math.min(botQty, realAvailableQty);
+
+      if (sellableQty <= 0) continue;
 
       const pairKey = Object.keys(indicators).find(k => k.startsWith(b.currency + '-'));
       const currentPrice = pairKey ? indicators[pairKey].currentPrice : (priceMap[b.currency] || 0);
-      const estimatedUsdValue = currentPrice ? parseFloat((botQty * currentPrice).toFixed(2)) : null;
+      const estimatedUsdValue = currentPrice ? parseFloat((sellableQty * currentPrice).toFixed(2)) : null;
 
       if (estimatedUsdValue !== null && estimatedUsdValue < 1) continue;
 
       structured.crypto[b.currency] = {
-        amount: botQty,
+        amount: sellableQty,
         estimatedUsdValue
       };
       if (estimatedUsdValue) totalCryptoUSD += estimatedUsdValue;

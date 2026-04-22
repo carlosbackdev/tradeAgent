@@ -6,7 +6,7 @@
 
 import { logger } from '../../utils/logger.js';
 import { notify } from '../../telegram/handles.js';
-import { saveOrder, saveDecision } from '../../utils/mongodb.js';
+import { saveOrder, saveDecision, markOrderCancelled } from '../../utils/mongodb.js';
 import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
 import { escapeHTML } from '../../utils/formatter.js';
 import { OrderManager } from '../../revolut/orders.js';
@@ -111,6 +111,55 @@ export async function processOpenOrders(
           try {
             await orderManager.cancelOrder(orderId);
             logger.info(`✅ Cancelled order ${orderId} for ${symbol}`);
+
+            if (dbConnected) {
+              try {
+                const cancelled = await markOrderCancelled({
+                  revolutOrderId: orderId,
+                  symbol,
+                  chatId,
+                  reason: `Cancelled by bot: ${analysis.reasoning}`
+                });
+
+                // Keep cancellation trace if the original order was not found in MongoDB
+                if (cancelled.matchedCount === 0) {
+                  const orderQty = Number(
+                    order.quantity
+                    ?? order.qty
+                    ?? order.base_size
+                    ?? order.order_configuration?.limit?.base_size
+                    ?? 0
+                  );
+                  const orderPrice = Number(
+                    order.price
+                    ?? order.limit_price
+                    ?? order.order_configuration?.limit?.price
+                    ?? 0
+                  );
+
+                  await saveOrder({
+                    decisionId,
+                    symbol,
+                    side: String(order.side || 'buy').toLowerCase(),
+                    orderType: order.order_type || order.orderType || 'limit',
+                    qty: orderQty || null,
+                    price: orderPrice || null,
+                    positionPct: null,
+                    usdAmount: (orderQty > 0 && orderPrice > 0) ? (orderQty * orderPrice) : null,
+                    revolutOrderId: orderId,
+                    takeProfit: null,
+                    stopLoss: null,
+                    riskRewardRatio: null,
+                    status: 'cancelled',
+                    error: `Cancelled by bot: ${analysis.reasoning}`,
+                    rendimiento: null,
+                    chatId,
+                  });
+                }
+              } catch (mongoErr) {
+                logger.warn(`⚠️ Failed to persist cancelled status for ${orderId}: ${mongoErr.message}`);
+              }
+            }
 
             results.cancelled++;
             results.cancelledOrders.push({

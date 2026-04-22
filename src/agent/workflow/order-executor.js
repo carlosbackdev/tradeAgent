@@ -7,6 +7,7 @@ import { OrderManager } from '../../revolut/orders.js';
 import { notifyOrderExecuted, notifyError } from '../../telegram/handles.js';
 import { saveOrder, applySellToOpenLots } from '../../utils/mongodb.js';
 import { logger } from '../../utils/logger.js';
+import { getAvailableUsdReal, getAvailableCoinReal } from './available-balance.js';
 
 // ── Position-sizing helpers ────────────────────────────────────────
 
@@ -14,17 +15,7 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function getAvailableUsd(balanceArray) {
-  return parseFloat(balanceArray.find(b => b.currency === 'USD')?.total || 0);
-}
-
-function getAvailableCoin(balanceArray, symbol) {
-  // symbol might be 'BTC-USD' or 'BTC/USD'
-  const baseCurrency = symbol.replace('/', '-').split('-')[0];
-  return parseFloat(balanceArray.find(b => b.currency === baseCurrency)?.total || 0);
-}
-
-export async function executeDecisions(decisions, coin, balanceArray, indicators, config, rendimiento = null, dbConnected = false, chatId = null, managedPositions = []) {
+export async function executeDecisions(decisions, coin, balanceArray, openOrders, realAvailableBalances, indicators, config, rendimiento = null, dbConnected = false, chatId = null, managedPositions = []) {
   const execResults = [];
   let executedCount = 0, skippedCount = 0, errorCount = 0;
 
@@ -58,7 +49,7 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
     if (positionPct > 0) {
       // ── positionPct mode (new) ──────────────────────────────
       if (d.action === 'BUY') {
-        const usdBalance = getAvailableUsd(balanceArray);
+        const usdBalance = Number(realAvailableBalances?.availableByCurrency?.USD ?? getAvailableUsdReal(balanceArray, openOrders));
         usd = usdBalance * positionPct;
         logger.info(`📐 BUY positionPct=${(positionPct * 100).toFixed(0)}% of $${usdBalance.toFixed(2)} USD → $${usd.toFixed(2)}`);
       }
@@ -71,6 +62,9 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
         // Option B: Sell ONLY based on bot-managed positions
         const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
         const coinManagedBalance = managedPos ? managedPos.qty : 0;
+        const coinAvailableReal = Number(realAvailableBalances?.availableByCurrency?.[baseCurrency]
+          ?? getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol));
+        const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
 
         if (currentPrice <= 0) {
           execResults.push({ ...d, rendimiento, status: 'error', error: `No current price for ${d.symbol}` });
@@ -79,9 +73,9 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
           continue;
         }
 
-        const qtyToSell = coinManagedBalance * positionPct;
+        const qtyToSell = coinSellable * positionPct;
         usd = qtyToSell * currentPrice;
-        logger.info(`📐 SELL positionPct=${(positionPct * 100).toFixed(0)}% of managed ${coinManagedBalance.toFixed(6)} ${baseCurrency} → $${usd.toFixed(2)}`);
+        logger.info(`📐 SELL positionPct=${(positionPct * 100).toFixed(0)}% of sellable ${coinSellable.toFixed(6)} ${baseCurrency} → $${usd.toFixed(2)}`);
       }
     } else {
       // ── Legacy usdAmount mode (backward compat) ────────────
@@ -93,10 +87,13 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
         const baseCurrency = d.symbol.split('-')[0];
         const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
         const coinManagedBalance = managedPos ? managedPos.qty : 0;
+        const coinAvailableReal = Number(realAvailableBalances?.availableByCurrency?.[baseCurrency]
+          ?? getAvailableCoinReal(balanceArray, openOrders, d.symbol));
+        const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
         const normalizedSymbol = d.symbol.replace('/', '-');
         const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-        usd = parseFloat((coinManagedBalance * currentPrice).toFixed(2));
-        logger.info(`💱 SELL auto-fill (legacy managed): ${coinManagedBalance} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`);
+        usd = parseFloat((coinSellable * currentPrice).toFixed(2));
+        logger.info(`💱 SELL auto-fill (legacy sellable): ${coinSellable} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`);
       }
     }
 
@@ -105,6 +102,35 @@ export async function executeDecisions(decisions, coin, balanceArray, indicators
 
     usd = parseFloat((usd || 0).toFixed(2));
     d.usdAmount = usd;
+
+    if (d.action === 'BUY') {
+      const usdAvailable = Number(realAvailableBalances?.availableByCurrency?.USD ?? getAvailableUsdReal(balanceArray, openOrders));
+      if (usd > usdAvailable + 0.01) {
+        execResults.push({ ...d, rendimiento, status: 'skipped', reason: `Insufficient available USD ($${usdAvailable.toFixed(2)}) after open BUY limits` });
+        skippedCount++;
+        continue;
+      }
+    }
+
+    if (d.action === 'SELL') {
+      const normalizedSymbol = d.symbol.replace('/', '-');
+      const baseCurrency = normalizedSymbol.split('-')[0];
+      const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
+      const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
+      const coinManagedBalance = managedPos ? managedPos.qty : 0;
+      const coinAvailableReal = Number(realAvailableBalances?.availableByCurrency?.[baseCurrency]
+        ?? getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol));
+      const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
+
+      if (currentPrice > 0) {
+        const qtyNeeded = usd / currentPrice;
+        if (qtyNeeded > coinSellable + 0.00000001) {
+          execResults.push({ ...d, rendimiento, status: 'skipped', reason: `Insufficient available ${baseCurrency} (${coinSellable.toFixed(8)}) after open SELL limits` });
+          skippedCount++;
+          continue;
+        }
+      }
+    }
 
     const minOrder = config.trading.minOrderUsd;
     if (isNaN(usd) || usd < minOrder) {

@@ -10,6 +10,18 @@ import { config } from '../config/config.js';
 let db = null;
 let client = null;
 
+function withActiveOrders(filter = {}) {
+  if (filter.status === 'cancelled') return filter;
+
+  const activeClause = { status: { $ne: 'cancelled' } };
+
+  if (Object.prototype.hasOwnProperty.call(filter, 'status')) {
+    return { $and: [activeClause, filter] };
+  }
+
+  return { ...filter, ...activeClause };
+}
+
 /**
  * Connect to MongoDB
  */
@@ -276,7 +288,7 @@ export async function getExecutedOrders(limit = 5, filter = {}) {
 
   try {
     return await ordersCollection
-      .find(filter)
+      .find(withActiveOrders(filter))
       .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
@@ -297,6 +309,7 @@ export async function getOpenBuyLots(symbol, chatId = null) {
   const query = {
     symbol: querySymbol,
     side: 'buy',
+    status: 'executed',
     lot_status: { $in: ['open', 'partially_closed'] }
   };
   if (chatId) query.chat_id = String(chatId);
@@ -316,6 +329,48 @@ export async function getOpenBuyLots(symbol, chatId = null) {
     logger.warn(`Failed to get open buy lots for ${symbol}: ${err.message}`);
     return [];
   }
+}
+
+/**
+ * Mark an existing order as cancelled.
+ */
+export async function markOrderCancelled({ revolutOrderId, symbol = null, chatId = null, reason = null }) {
+  if (!revolutOrderId) {
+    return { matchedCount: 0, modifiedCount: 0 };
+  }
+
+  const db = await connectDB();
+  const ordersCollection = db.collection('orders');
+
+  const query = {
+    revolut_order_id: String(revolutOrderId),
+    status: { $ne: 'cancelled' }
+  };
+
+  if (symbol) {
+    query.symbol = { $in: [symbol, symbol.replace('-', '/'), symbol.replace('/', '-')] };
+  }
+
+  if (chatId) {
+    query.chat_id = String(chatId);
+  }
+
+  const result = await ordersCollection.updateOne(query, {
+    $set: {
+      status: 'cancelled',
+      cancelled_at: new Date(),
+      error: reason || null
+    }
+  });
+
+  if (result.modifiedCount > 0) {
+    logger.info(`🟠 Order marked as cancelled in MongoDB: ${revolutOrderId}`);
+  }
+
+  return {
+    matchedCount: result.matchedCount || 0,
+    modifiedCount: result.modifiedCount || 0,
+  };
 }
 
 /**
@@ -465,10 +520,10 @@ export async function getTradingStats(chatId = null) {
 
   try {
     const [totalOrders, totalDecisions, totalBuys, totalSells] = await Promise.all([
-      ordersCollection.countDocuments({ ...query, status: 'executed' }),
+      ordersCollection.countDocuments(withActiveOrders({ ...query, status: 'executed' })),
       decisionsCollection.countDocuments(query),
-      ordersCollection.countDocuments({ ...query, side: 'buy', status: 'executed' }),
-      ordersCollection.countDocuments({ ...query, side: 'sell', status: 'executed' }),
+      ordersCollection.countDocuments(withActiveOrders({ ...query, side: 'buy', status: 'executed' })),
+      ordersCollection.countDocuments(withActiveOrders({ ...query, side: 'sell', status: 'executed' })),
     ]);
 
     return {
@@ -506,13 +561,13 @@ export async function getTradingPerformance(chatId = null, realBalances = null) 
     // Parallel: fetch all executed orders + decision count
     const [orders, totalDecisions, sellOrdersWithRendimiento] = await Promise.all([
       ordersCollection
-        .find({ ...query, status: 'executed', price: { $ne: null }, qty: { $ne: null } })
+        .find(withActiveOrders({ ...query, status: 'executed', price: { $ne: null }, qty: { $ne: null } }))
         .sort({ created_at: 1 })
         .toArray(),
       decisionsCollection.countDocuments(query),
       // Sum rendimiento stored on SELL orders (realized PnL% per trade, can be negative)
       ordersCollection
-        .find({ ...query, side: 'sell', status: 'executed', rendimiento: { $ne: null, $type: 'double' } })
+        .find(withActiveOrders({ ...query, side: 'sell', status: 'executed', rendimiento: { $ne: null, $type: 'double' } }))
         .project({ rendimiento: 1 })
         .toArray(),
     ]);
@@ -691,7 +746,7 @@ export async function getAccumulatedRendimiento(chatId = null) {
 
   try {
     const sellOrders = await ordersCollection
-      .find(query)
+      .find(withActiveOrders(query))
       .project({ rendimiento: 1 })
       .toArray();
 
