@@ -77,16 +77,16 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     let higherTfIndicators = null;
     if (higherTfCandles?.candles?.length >= 26) {
-      const htfCloses  = closesFromCandles(higherTfCandles.candles);
+      const htfCloses = closesFromCandles(higherTfCandles.candles);
       const htfComputed = computeIndicators(htfCloses);
       if (!htfComputed.error) {
         higherTfIndicators = {
           interval: higherTfInterval,
-          rsi14:      htfComputed.rsi14,
+          rsi14: htfComputed.rsi14,
           macdHistogram: htfComputed.macdHistogram,
           bbPosition: htfComputed.bbPosition,
-          ema12:      htfComputed.ema12,
-          ema26:      htfComputed.ema26,
+          ema12: htfComputed.ema12,
+          ema26: htfComputed.ema26,
           confluence: htfComputed.confluence,
         };
         logger.debug(`📈 Higher TF (${higherTfInterval}m) indicators computed for ${coin}`);
@@ -166,7 +166,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
               action: d.action,
               confidence: d.confidence,
               price: d.currentPrice || null,
-              marketSummary: d.marketSummary?.substring(0, 150) || d.reasoning?.substring(0, 150),
+              marketSummary: d.marketSummary?.substring(0, 210) || d.reasoning?.substring(0, 150),
               rendimiento: d.rendimiento !== undefined ? d.rendimiento : null,
             }));
           }
