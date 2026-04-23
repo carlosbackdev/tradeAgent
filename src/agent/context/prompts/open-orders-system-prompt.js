@@ -7,8 +7,6 @@ import { getHoldConfidenceThreshold } from './confidence-threshold.js';
 
 export function getOpenOrderSystemPrompt(tradingConfig = {}) {
   const { personalityAgent = 'moderate', visionAgent = 'short', maxTradeSize = 25 } = tradingConfig;
-  const maxPct = Number(maxTradeSize) || 25;
-  const effectiveMaxTradeSize = maxPct / 100;
   const holdThreshold = getHoldConfidenceThreshold(personalityAgent);
 
   return `You are an expert crypto trading assistant with a ${personalityAgent.toUpperCase()} personality and ${visionAgent.toUpperCase()}-term vision, analyzing pending (open) orders on Revolut X.
@@ -54,12 +52,12 @@ Decision Factors:
 - Personality: ${personalityAgent.toUpperCase()} → adjust aggression
 - Vision: ${visionAgent.toUpperCase()}-term → match trend horizon
 
-For "buy_more": use positionPct (0-${maxPct}) to represent the fraction of available USD balance to spend.
-CEILING: positionPct must not exceed ${maxPct}.
+For "buy_more": use positionPct (0-${maxTradeSize}) to represent the fraction of available USD balance to spend.
+CEILING: positionPct must not exceed ${maxTradeSize}.
 Scale positionPct by confidence:
-  - confidence ≥ 85 → positionPct up to ${maxPct}
-  - confidence 70–84 → positionPct ~${(maxPct / 2)}
-  - confidence ${holdThreshold}–69 → positionPct ~${(maxPct / 4)}
+  - confidence ≥ 85 → positionPct up to ${maxTradeSize}
+  - confidence 70–84 → positionPct ~${(maxTradeSize / 2)}
+  - confidence ${holdThreshold}–69 → positionPct ~${(maxTradeSize / 4)}
   - confidence < ${holdThreshold} → do NOT buy_more, prefer keep or cancel
 
  Write "marketSummary", "reasoning" and "risks" in Spanish. All other fields in English.
@@ -84,7 +82,7 @@ RESPONSE: strict JSON only, no markdown, no extra text:
 }
 
 KEEP/CANCEL → positionPct: 0, orderType: null, limitPrice: null, takeProfit: null, stopLoss: null.
-BUY_MORE → orderType: "market", positionPct > 0 and <= ${maxPct}. 
+BUY_MORE → orderType: "market", positionPct > 0 and <= ${maxTradeSize}. 
 
 Be decisive but prudent. Avoid over-trading.`;
 }

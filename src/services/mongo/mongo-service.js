@@ -205,12 +205,18 @@ export async function getOpenBuyLots(symbol, chatId = null) {
   if (chatId) query.chat_id = String(chatId);
 
   try {
+    const DUST_THRESHOLD_USD = 0.12;
     const lots = await ordersCollection.find(query).sort({ created_at: 1 }).toArray();
-    return lots.map(lot => ({
-      ...lot,
-      remaining_qty: Number(lot.remaining_qty),
-      remaining_cost_usd: Number(lot.remaining_cost_usd),
-    })).filter(lot => lot.remaining_qty > 0);
+    return lots
+      .map(lot => ({
+        ...lot,
+        remaining_qty: Number(lot.remaining_qty),
+        remaining_cost_usd: Number(lot.remaining_cost_usd),
+      }))
+      .filter(lot =>
+        lot.remaining_qty > 0 &&
+        lot.remaining_cost_usd >= DUST_THRESHOLD_USD
+      );
   } catch (err) {
     logger.warn(`Failed to get open buy lots for ${symbol}: ${err.message}`);
     return [];
@@ -252,6 +258,8 @@ export async function applySellToOpenLots(symbol, sellQty, sellPrice, chatId = n
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
 
+  const DUST_THRESHOLD_USD = 0.12;
+
   let remainingSellQty = Number(sellQty);
   let totalRealizedPnlUsd = 0;
   const fifoMatches = [];
@@ -284,18 +292,26 @@ export async function applySellToOpenLots(symbol, sellQty, sellPrice, chatId = n
     totalRealizedPnlUsd += pnlUsd;
     remainingSellQty -= consumeQty;
 
-    const newRemainingQty = lotRemainingQty - consumeQty;
-    const newRemainingCostUsd = newRemainingQty * costPerUnit;
-    const newLotStatus = newRemainingQty > 0.00000001 ? 'partially_closed' : 'closed';
+    const rawRemainingQty = lotRemainingQty - consumeQty;
+    const rawRemainingCostUsd = rawRemainingQty * costPerUnit;
+
+    const shouldCloseAsDust = rawRemainingCostUsd < DUST_THRESHOLD_USD;
+
+    const finalRemainingQty = shouldCloseAsDust ? 0 : Number(rawRemainingQty.toFixed(8));
+    const finalRemainingCostUsd = shouldCloseAsDust ? 0 : Number(rawRemainingCostUsd.toFixed(8));
+    const newLotStatus = shouldCloseAsDust ? 'closed' : 'partially_closed';
 
     const updateDoc = {
       $set: {
-        remaining_qty: newRemainingQty,
-        remaining_cost_usd: newRemainingCostUsd,
+        remaining_qty: finalRemainingQty,
+        remaining_cost_usd: finalRemainingCostUsd,
         lot_status: newLotStatus,
       },
     };
-    if (newLotStatus === 'closed') updateDoc.$set.closed_at = new Date();
+
+    if (newLotStatus === 'closed') {
+      updateDoc.$set.closed_at = new Date();
+    }
 
     await ordersCollection.updateOne({ _id: lot._id }, updateDoc);
   }

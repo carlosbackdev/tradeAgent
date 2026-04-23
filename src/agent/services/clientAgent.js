@@ -74,7 +74,6 @@ export async function callClaudeWithCustomPrompt(userMessage, apiKey = null, mod
 }
 
 export async function callAgentAnalyzer(userMessage, apiKey = null, model = null, tradingConfig = null) {
-  logger.info(`📨 MAIN ANALYZER → Claude payload (3-layer):\n${userMessage}`);
   return callClaudeWithCustomPrompt(userMessage, apiKey, model, tradingConfig);
 }
 
