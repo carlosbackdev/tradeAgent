@@ -6,9 +6,9 @@
 import { getHoldConfidenceThreshold } from './confidence-threshold.js';
 
 export function getOpenOrderSystemPrompt(tradingConfig = {}) {
-  const { personalityAgent = 'moderate', visionAgent = 'short', maxTradeSize = 0.25 } = tradingConfig;
-  const effectiveMaxTradeSize = normalizeMaxTradeSize(maxTradeSize);
-  const maxPct = Math.round(effectiveMaxTradeSize * 100);
+  const { personalityAgent = 'moderate', visionAgent = 'short', maxTradeSize = 25 } = tradingConfig;
+  const maxPct = Number(maxTradeSize) || 25;
+  const effectiveMaxTradeSize = maxPct / 100;
   const holdThreshold = getHoldConfidenceThreshold(personalityAgent);
 
   return `You are an expert crypto trading assistant with a ${personalityAgent.toUpperCase()} personality and ${visionAgent.toUpperCase()}-term vision, analyzing pending (open) orders on Revolut X.
@@ -54,12 +54,12 @@ Decision Factors:
 - Personality: ${personalityAgent.toUpperCase()} → adjust aggression
 - Vision: ${visionAgent.toUpperCase()}-term → match trend horizon
 
-For "buy_more": use positionPct (0–1) to represent the fraction of available USD balance to spend.
-CEILING: positionPct must not exceed ${maxPct / 100}.
+For "buy_more": use positionPct (0-${maxPct}) to represent the fraction of available USD balance to spend.
+CEILING: positionPct must not exceed ${maxPct}.
 Scale positionPct by confidence:
-  - confidence ≥ 85 → positionPct up to ${maxPct / 100}
-  - confidence 70–84 → positionPct ~${(maxPct * 0.5 / 100).toFixed(2)}
-  - confidence ${holdThreshold}–69 → positionPct ~${(maxPct * 0.2 / 100).toFixed(2)}
+  - confidence ≥ 85 → positionPct up to ${maxPct}
+  - confidence 70–84 → positionPct ~${(maxPct / 2)}
+  - confidence ${holdThreshold}–69 → positionPct ~${(maxPct / 4)}
   - confidence < ${holdThreshold} → do NOT buy_more, prefer keep or cancel
 
  Write "marketSummary", "reasoning" and "risks" in Spanish. All other fields in English.
@@ -84,17 +84,7 @@ RESPONSE: strict JSON only, no markdown, no extra text:
 }
 
 KEEP/CANCEL → positionPct: 0, orderType: null, limitPrice: null, takeProfit: null, stopLoss: null.
-BUY_MORE → orderType: "market", positionPct > 0 and <= ${maxPct / 100}. 
+BUY_MORE → orderType: "market", positionPct > 0 and <= ${maxPct}. 
 
 Be decisive but prudent. Avoid over-trading.`;
-}
-
-function normalizeMaxTradeSize(rawValue) {
-  if (rawValue === 0) return 1;
-  if (rawValue === null || rawValue === undefined) return 0.25;
-
-  const n = Number(rawValue);
-  if (!Number.isFinite(n) || n < 0) return 0.25;
-  if (n > 1) return Math.min(1, n / 100);
-  return n;
 }

@@ -7,8 +7,8 @@ import { getHoldConfidenceThreshold } from './confidence-threshold.js';
 
 export const getSystemPrompt = (tradingConfig) => {
   const { visionAgent, personalityAgent, takeProfitPct, stopLossPct, maxTradeSize, minOrderUsd } = tradingConfig;
-  const effectiveMaxTradeSize = normalizeMaxTradeSize(maxTradeSize);
-  const maxPct = Math.round(effectiveMaxTradeSize * 100);
+  const maxPct = Number(maxTradeSize) || 25;
+  const effectiveMaxTradeSize = maxPct / 100;
   const holdThreshold = getHoldConfidenceThreshold(personalityAgent);
   const effectiveMinOrderUsd = Number(minOrderUsd ?? 0);
 
@@ -99,12 +99,4 @@ RESPONSE: strict JSON only, no markdown, no extra text:
 HOLD → positionPct: 0, orderType: null, takeProfit: null, stopLoss: null.`;
 };
 
-function normalizeMaxTradeSize(rawValue) {
-  if (rawValue === 0) return 1;
-  if (rawValue === null || rawValue === undefined) return 0.25;
 
-  const n = Number(rawValue);
-  if (!Number.isFinite(n) || n < 0) return 0.25;
-  if (n > 1) return Math.min(1, n / 100);
-  return n;
-}

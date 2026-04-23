@@ -30,6 +30,12 @@ export function buildUserConfig(user) {
     return isNaN(n) ? fallback : n;
   };
 
+  const parseMaxTradeSize = (val, fallback) => {
+    let n = parseFloat(String(val || '').replace(',', '.'));
+    if (isNaN(n) || n <= 0) return fallback;
+    return Math.min(100, n);
+  };
+
   // Admin specifics for fallbacks
   const getEnv = (key, fallback = '') => process.env[key] || fallback;
 
@@ -53,7 +59,7 @@ export function buildUserConfig(user) {
         .split(',')
         .map(p => p.trim())
         .filter(Boolean),
-      maxTradeSize: parseNum(cfg.MAX_TRADE_SIZE || (isAdmin ? getEnv('MAX_TRADE_SIZE') : ''), 0.10),
+      maxTradeSize: parseMaxTradeSize(cfg.MAX_TRADE_SIZE || (isAdmin ? getEnv('MAX_TRADE_SIZE') : ''), 10),
       minOrderUsd: parseNum(cfg.MIN_ORDER || (isAdmin ? getEnv('MIN_ORDER') : ''), 50),
       takeProfitPct: parseNum(cfg.TAKE_PROFIT_PCT || (isAdmin ? getEnv('TAKE_PROFIT_PCT') : ''), 0),
       stopLossPct: parseNum(cfg.STOP_LOSS_PCT || (isAdmin ? getEnv('STOP_LOSS_PCT') : ''), 0),
@@ -90,7 +96,7 @@ export function buildUserConfig(user) {
         'VISION_AGENT': process.env.VISION_AGENT || 'short',
         'PERSONALITY_AGENT': process.env.PERSONALITY_AGENT || 'moderate',
         'TRADING_PAIRS': process.env.TRADING_PAIRS || 'BTC-USD',
-        'MAX_TRADE_SIZE': process.env.MAX_TRADE_SIZE || '0.1',
+        'MAX_TRADE_SIZE': process.env.MAX_TRADE_SIZE || '10',
         'MIN_ORDER': process.env.MIN_ORDER || '50',
         'TAKE_PROFIT_PCT': process.env.TAKE_PROFIT_PCT || '0',
         'STOP_LOSS_PCT': process.env.STOP_LOSS_PCT || '0',

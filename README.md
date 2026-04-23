@@ -255,7 +255,7 @@ Every cycle Claude receives a single JSON message containing:
 
   // Hard constraints
   "constraints": {
-    "MAX_TRADE_SIZE": 0.25,
+    "MAX_TRADE_SIZE": 25,
     "MIN_ORDER": 50,
     "DRY_RUN": false,
     "TAKE_PROFIT_PCT": 5,

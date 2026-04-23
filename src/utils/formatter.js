@@ -166,7 +166,11 @@ export function formatConfigMessage(params) {
   let msg = `═══ 🤖 <b>CONFIGURACIÓN AGENTE</b> ═══\n\n`;
 
   params.forEach((p, i) => {
-    msg += `${i + 1}. <b>${p.key}</b>\n   └ <code>${p.value}</code>\n`;
+    if (p.key === "MAX_TRADE_SIZE") {
+      msg += `${i + 1}. <b>${p.key}</b>\n   └ <code>${p.value > 1 ? p.value + '%' : p.value * 100 + '%'}</code>\n`;
+    } else {
+      msg += `${i + 1}. <b>${p.key}</b>\n   └ <code>${p.value}</code>\n`;
+    }
   });
 
   msg += `\n✍️ <b>MODIFICAR PARÁMETRO</b>\n`;
@@ -240,7 +244,7 @@ export function formatAgentStatusMessage({ uConfig, cronSt, mode }) {
 
   msg += `💰 <b>GESTIÓN DE RIESGO</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `💳 <b>Max Trade:</b> ${(uConfig.trading.maxTradeSize * 100).toFixed(0)}%\n`;
+  msg += `💳 <b>Max Trade:</b> ${uConfig.trading.maxTradeSize}%\n`;
   msg += `💵 <b>Min Orden:</b> $${uConfig.trading.minOrderUsd}\n`;
   msg += `🎯 <b>TP:</b> ${uConfig.trading.takeProfitPct}% | 🎯 <b>SL:</b> ${uConfig.trading.stopLossPct}%\n\n`;
 

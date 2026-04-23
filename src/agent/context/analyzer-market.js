@@ -6,8 +6,6 @@ import { config } from '../../config/config.js';
 
 export function buildAnalyzerMessage(context, question = '', tradingConfig = null) {
   const activeTradingConfig = tradingConfig || config.trading;
-  const effectiveMaxTradeSize = normalizeMaxTradeSize(activeTradingConfig.maxTradeSize);
-
   const usableBalances = JSON.parse(JSON.stringify(context.balances || {}));
 
   const openOrders = Array.isArray(context.openOrders) ? context.openOrders : [];
@@ -151,14 +149,4 @@ function parsePercent(value) {
   const clean = String(value).replace('%', '');
   const n = Number(clean);
   return Number.isFinite(n) ? n : null;
-}
-
-function normalizeMaxTradeSize(rawValue) {
-  if (rawValue === 0) return 1;
-  if (rawValue === null || rawValue === undefined) return 0.25;
-
-  const n = Number(rawValue);
-  if (!Number.isFinite(n) || n < 0) return 0.25;
-  if (n > 1) return Math.min(1, n / 100);
-  return n;
 }

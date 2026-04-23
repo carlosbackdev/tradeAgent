@@ -115,7 +115,10 @@ La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode
     if (key === 'TRADING_PAIRS') {
       this.userConfig.trading.pairs = value.split(',').map(p => p.trim()).filter(Boolean);
     } else if (key === 'MAX_TRADE_SIZE') {
-      this.userConfig.trading.maxTradeSize = parseNum(value, 0.10);
+      let n = parseFloat(String(value || '').replace(',', '.'));
+      if (!isNaN(n) && n > 0) {
+        this.userConfig.trading.maxTradeSize = Math.min(100, n);
+      }
     } else if (key === 'MIN_ORDER') {
       this.userConfig.trading.minOrderUsd = parseNum(value, 50);
     } else if (key === 'TAKE_PROFIT_PCT') {
@@ -160,7 +163,7 @@ La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode
     await this._send(
       `⚙️ *Tu configuración*\n\n` +
       `🎯 Pares: ${this.userConfig.trading.pairs.join(', ')}\n` +
-      `💰 Max trade: ${(this.userConfig.trading.maxTradeSize * 100).toFixed(0)}%\n` +
+      `💰 Max trade: ${this.userConfig.trading.maxTradeSize}%\n` +
       `💵 Min orden: $${this.userConfig.trading.minOrderUsd}\n` +
       `🎯 TP: ${this.userConfig.trading.takeProfitPct}%\n` +
       `🎯 SL: ${this.userConfig.trading.stopLossPct}%\n` +

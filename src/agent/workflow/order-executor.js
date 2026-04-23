@@ -45,7 +45,7 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
     let usd = null;
     const rawPositionPct = Number(d.positionPct ?? 0);
     const positionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
-      ? clamp(rawPositionPct, 0, config.trading.maxTradeSize)
+      ? clamp(rawPositionPct, 0, config.trading.maxTradeSize / 100)
       : 0;
 
     if (positionPct > 0) {

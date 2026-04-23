@@ -50,6 +50,7 @@ export async function callClaudeWithCustomPrompt(userMessage, apiKey = null, mod
   const effectiveModel = model || config.anthropic.model;
   const hasExplicitApiKey = apiKey !== null && apiKey !== undefined;
   const effectiveApiKey = hasExplicitApiKey ? String(apiKey).trim() : (config.anthropic.apiKey || '');
+  logger.info(`🔑 Effective System Prompt: ${effectiveSystemPrompt}`);
 
   if (!effectiveApiKey || !effectiveApiKey.startsWith('sk-')) {
     throw new Error('No Anthropic API Key provided');

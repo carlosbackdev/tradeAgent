@@ -78,7 +78,7 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
       confluence: indicators.confluence || null,
     },
     trading_constraints: {
-      MAX_TRADE_SIZE: Number(tradingConfig?.maxTradeSize ?? 0.25),
+      MAX_TRADE_SIZE: Number(tradingConfig?.maxTradeSize ?? 25),
       MIN_ORDER: Number(tradingConfig?.minOrderUsd ?? 0),
       TAKE_PROFIT_PCT: Number(tradingConfig?.takeProfitPct ?? 0),
       STOP_LOSS_PCT: Number(tradingConfig?.stopLossPct ?? 0),
@@ -186,7 +186,7 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol, tradingC
         HOLD_IF_PRICE_MOVE_LT_PCT: 0.5,
         CANCEL_IF_SPREAD_GT_PCT: 0.5,
         CANCEL_IF_CONFLUENCE_FLIPS: true,
-        MAX_TRADE_SIZE: Number(trading_constraints?.MAX_TRADE_SIZE ?? tradingConfig?.maxTradeSize ?? 0.25),
+        MAX_TRADE_SIZE: Number(trading_constraints?.MAX_TRADE_SIZE ?? tradingConfig?.maxTradeSize ?? 25),
         MIN_ORDER: Number(trading_constraints?.MIN_ORDER ?? tradingConfig?.minOrderUsd ?? 0),
         TAKE_PROFIT_PCT: Number(trading_constraints?.TAKE_PROFIT_PCT ?? tradingConfig?.takeProfitPct ?? 0),
         STOP_LOSS_PCT: Number(trading_constraints?.STOP_LOSS_PCT ?? tradingConfig?.stopLossPct ?? 0),

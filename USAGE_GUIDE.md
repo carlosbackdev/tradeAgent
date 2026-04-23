@@ -101,7 +101,7 @@ PERSONALITY_AGENT=moderate
 VISION_AGENT=medium
 
 # Gestión de riesgo
-MAX_TRADE_SIZE=0.15       # Máximo 15% del balance por operación
+MAX_TRADE_SIZE=15         # Máximo 15% del balance por operación
 MIN_ORDER=50              # Mínimo $50 por orden
 TAKE_PROFIT_PCT=5         # Cierra automáticamente con +5%
 STOP_LOSS_PCT=3           # Cierra automáticamente con -3%
@@ -131,7 +131,7 @@ PERSONALITY_AGENT=moderate
 VISION_AGENT=long
 
 # Posiciones más grandes, ya que el movimiento esperado es mayor
-MAX_TRADE_SIZE=0.20       # Hasta 20%
+MAX_TRADE_SIZE=20         # Hasta 20%
 MIN_ORDER=100             # Mínimo $100 para evitar ruido
 TAKE_PROFIT_PCT=10        # TP amplio para dejar correr tendencias
 STOP_LOSS_PCT=5           # SL más holgado para aguantar volatilidad
@@ -158,7 +158,7 @@ PERSONALITY_AGENT=moderate
 VISION_AGENT=short
 
 # Posiciones pequeñas, muchas operaciones
-MAX_TRADE_SIZE=0.10       # Máximo 10% por trade
+MAX_TRADE_SIZE=10         # Máximo 10% por trade
 MIN_ORDER=20              # Órdenes pequeñas
 TAKE_PROFIT_PCT=2         # TP rápido
 STOP_LOSS_PCT=1           # SL ajustado
