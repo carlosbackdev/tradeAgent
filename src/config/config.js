@@ -44,7 +44,7 @@ class Config {
     this.trading = {
       pairs: (process.env.TRADING_PAIRS || '').split(',').map(p => p.trim().replace('/', '-')).filter(Boolean),
     };
-    
+
     this.indicators = {
       candlesInterval: parseInt(process.env.INDICATORS_CANDLES_INTERVAL) || 5,
     };

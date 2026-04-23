@@ -23,7 +23,7 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
   const compactPairs = snapshots.map(snapshot => {
     const candlesArray = snapshot.candles?.candles || [];
     const last30Candles = candlesArray.slice(-30);
-    
+
     const changesPercent = last30Candles
       .reduce((arr, candle, idx, all) => {
         if (idx === 0) arr.push(0);
@@ -47,12 +47,12 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
       const firstClose = candlesArray[0].close;
       const lastClose = candlesArray[candlesArray.length - 1].close;
       allCandlesData.totalChangePct = parseFloat(((lastClose - firstClose) / firstClose * 100).toFixed(3));
-      
+
       const firstTime = candlesArray[0].timestamp;
       const lastTime = candlesArray[candlesArray.length - 1].timestamp;
       allCandlesData.firstVelaTime = new Date(firstTime).toISOString();
       allCandlesData.lastVelaTime = new Date(lastTime).toISOString();
-      
+
       const durationMinutes = Math.round((lastTime - firstTime) / 1000 / 60);
       if (durationMinutes < 60) {
         allCandlesData.durationRange = `${durationMinutes} min`;
@@ -80,12 +80,12 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
       const firstClose = last30Candles[0].close;
       const lastClose = last30Candles[last30Candles.length - 1].close;
       last30Data.totalChangePct = parseFloat(((lastClose - firstClose) / firstClose * 100).toFixed(3));
-      
+
       const firstTime = last30Candles[0].timestamp;
       const lastTime = last30Candles[last30Candles.length - 1].timestamp;
       last30Data.firstVelaTime = new Date(firstTime).toISOString();
       last30Data.lastVelaTime = new Date(lastTime).toISOString();
-      
+
       const durationMinutes = Math.round((lastTime - firstTime) / 1000 / 60);
       if (durationMinutes < 60) {
         last30Data.durationRange = `${durationMinutes} min`;
@@ -94,10 +94,10 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
       } else {
         last30Data.durationRange = `${(durationMinutes / 1440).toFixed(1)} días`;
       }
-      
+
       // Calculate ATR for volatility
       last30Data.volatilityATR = calculateATR(last30Candles);
-      
+
       // Get volumes from last 5 candles
       const last5Candles = last30Candles.slice(-5);
       last30Data.recentVolumes = last5Candles.map(c => c.volume || 0);
@@ -336,12 +336,12 @@ function buildRegimeSummary(ind, marketCtx) {
 
 function calculateATR(candles, period = 14) {
   if (candles.length < period) return null;
-  
+
   const trueRanges = [];
   for (let i = 0; i < candles.length; i++) {
     const current = candles[i];
     const previous = i > 0 ? candles[i - 1] : null;
-    
+
     let tr = current.high - current.low; // H - L
     if (previous) {
       tr = Math.max(
@@ -352,7 +352,7 @@ function calculateATR(candles, period = 14) {
     }
     trueRanges.push(tr);
   }
-  
+
   // Calculate SMA of TR for the period
   const relevantTR = trueRanges.slice(-period);
   const atr = relevantTR.reduce((a, b) => a + b, 0) / period;
@@ -422,6 +422,6 @@ function extractRelevantBalances(balances, indicators = {}, priceMap = {}, manag
     cashPercentage: totalPortfolioUSD > 0 ? parseFloat((totalUSD / totalPortfolioUSD * 100).toFixed(2)) : 0,
     cryptoPercentage: totalPortfolioUSD > 0 ? parseFloat((totalCryptoUSD / totalPortfolioUSD * 100).toFixed(2)) : 0
   };
-  
+
   return structured;
 }

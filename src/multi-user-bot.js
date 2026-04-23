@@ -46,7 +46,7 @@ const BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // Active user sessions: Map<telegramId, UserSession>
 const sessions = new Map();
-let botUser = null; 
+let botUser = null;
 
 // ─────────────────────────────────────────────────────────────────
 // Telegram API helpers
@@ -76,10 +76,10 @@ async function sendMessage(chatId, text, extra = {}) {
 }
 
 async function editMessage(chatId, messageId, text, extra = {}) {
-  const payload = { 
-    chat_id: chatId, 
-    message_id: messageId, 
-    text, 
+  const payload = {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
     parse_mode: 'HTML',
     ...(extra.reply_markup ? { reply_markup: extra.reply_markup } : extra)
   };
@@ -93,7 +93,7 @@ async function answerCallback(callbackQueryId, text = '✅') {
     callback_query_id: callbackQueryId,
     text,
     show_alert: false,
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -111,17 +111,17 @@ async function handleAdminCommand(chatId, text) {
     }
     const result = await inviteUser({ telegramUsername: username, invitedBy: String(chatId) });
     if (result.ok) {
-        if (!botUser?.username) {
-          await sendMessage(chatId, `✅ @${result.username} ha sido invitado. Cargando nombre del bot...`);
-          return;
-        }
+      if (!botUser?.username) {
+        await sendMessage(chatId, `✅ @${result.username} ha sido invitado. Cargando nombre del bot...`);
+        return;
+      }
 
-        const inviteLink = `https://t.me/${botUser.username}?start=invite_${result.inviteCode}`;
-        await sendMessage(
-          chatId,
-          `✅ @${result.username} ha sido invitado.\n\n` +
-          `Pásale este enlace para activar su acceso:\n${inviteLink}`
-        );
+      const inviteLink = `https://t.me/${botUser.username}?start=invite_${result.inviteCode}`;
+      await sendMessage(
+        chatId,
+        `✅ @${result.username} ha sido invitado.\n\n` +
+        `Pásale este enlace para activar su acceso:\n${inviteLink}`
+      );
     } else {
       await sendMessage(chatId, `⚠️ ${result.reason}`);
     }
@@ -294,9 +294,9 @@ async function routeUpdate(update) {
   // Try to claim a pending invite by username (fallback)
   if (!user || user.status === 'pending_invite') {
     if (fromUsername) {
-       logger.info(`Attempting to claim invite by username: ${fromUsername} for ${fromId}`);
-       user = await claimInvite(chatId, fromUsername);
-       if (user) logger.info(`✅ Invite username claimed successfully for ${user.telegram_username}`);
+      logger.info(`Attempting to claim invite by username: ${fromUsername} for ${fromId}`);
+      user = await claimInvite(chatId, fromUsername);
+      if (user) logger.info(`✅ Invite username claimed successfully for ${user.telegram_username}`);
     }
   }
 
@@ -331,7 +331,7 @@ async function routeUpdate(update) {
 
     if (cbData === 'onboarding_start' || cbData === 'onboarding_start_force') {
       await answerCallback(cbId);
-      
+
       if (cbData === 'onboarding_start_force') {
         const { updateUserStatus } = await import('./users/user-registry.js');
         await updateUserStatus(chatId, 'pending_setup');

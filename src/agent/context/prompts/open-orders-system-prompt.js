@@ -66,7 +66,7 @@ RESPONSE: strict JSON only, no markdown, no extra text:
 {
   "decisions": [
     {
-      "symbol": "BTC/USD",
+      "symbol": "BTC-USD",
       "action": "KEEP" | "CANCEL" | "BUY_MORE",
       "orderType": "market" | null,
       "limitPrice": null,

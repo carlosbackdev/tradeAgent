@@ -16,14 +16,14 @@ import { getOpenOrderSystemPrompt } from './prompts/open-orders-system-prompt.js
  * Ask Claude AI whether to keep, cancel, or add more to an open order
  */
 export async function analyzeOpenOrderWithClaude(openOrder, analyzerContext, symbol, apiKey, model, tradingConfig) {
-  
+
   try {
     logger.info(`🤖 Analyzing open order for ${symbol} with Claude...`);
 
     const analysisContext = buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol, tradingConfig);
     const userMessage = buildOpenOrderAnalysisMessage(analysisContext, symbol, tradingConfig);
     const systemPrompt = getOpenOrderSystemPrompt(tradingConfig);
-    
+
     logger.info(`📨 OPEN ORDER ANALYZER → Claude payload (3-layer):\n${userMessage}`);
 
     const decision = await callClaudeWithCustomPrompt(userMessage, apiKey, model, tradingConfig, systemPrompt);

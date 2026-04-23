@@ -67,7 +67,7 @@ export async function processOnboardingStep(user, text) {
   try {
     // Save piece of config
     await updateUserConfig(user.telegram_id, configUpdate);
-    
+
     if (isDone) {
       // Activate user
       await setUserStatus(user.telegram_id, 'active');

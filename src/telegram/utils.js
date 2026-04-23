@@ -11,9 +11,9 @@ export function telegramRequest(botToken, method, payload) {
     const data = JSON.stringify(payload);
     const options = {
       hostname: 'api.telegram.org',
-      path:     `/bot${botToken}/${method}`,
-      method:   'POST',
-      headers:  { 'Content-Type': 'application/json', 'Content-Length': data.length },
+      path: `/bot${botToken}/${method}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': data.length },
     };
 
     const req = https.request(options, res => {
@@ -55,7 +55,7 @@ export function createTelegramHelpers(botToken, chatId) {
     async answerCallback(callbackQueryId, text = '✅') {
       return telegramRequest(botToken, 'answerCallbackQuery', {
         callback_query_id: callbackQueryId, text, show_alert: false,
-      }).catch(() => {});
+      }).catch(() => { });
     },
   };
 }
@@ -64,8 +64,8 @@ export function getUpdates(botToken, updateOffset) {
   return new Promise((resolve) => {
     const options = {
       hostname: 'api.telegram.org',
-      path:     `/bot${botToken}/getUpdates?offset=${updateOffset}&timeout=25`,
-      method:   'GET',
+      path: `/bot${botToken}/getUpdates?offset=${updateOffset}&timeout=25`,
+      method: 'GET',
     };
     const req = https.request(options, res => {
       let body = '';

@@ -38,7 +38,7 @@ export async function checkPortfolioHealth(currentPortfolioValue, maxDrawdownPct
 
     // Use previousCycleValue as reference, or current value if no history
     const referenceValue = previousCycleValue || currentPortfolioValue;
-    
+
     // Calculate drawdown percentage from reference point
     const drawdown = referenceValue - currentPortfolioValue;
     const drawdownPct = referenceValue > 0 ? (drawdown / referenceValue) * 100 : 0;

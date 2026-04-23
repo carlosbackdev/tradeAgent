@@ -37,7 +37,7 @@ export class RevolutClient {
 
     // Support both file path (single user) and direct PEM string (multi user)
     const privateKey = (revConfig.privateKeyPem || revConfig.REVOLUT_PRIVATE_KEY_PEM);
-    
+
     if (privateKey && privateKey.includes('PRIVATE KEY')) {
       this.privateKeyPem = privateKey;
     } else {

@@ -17,12 +17,12 @@ export async function fetchMarketData(coin, config) {
   const market = new MarketData(client);
 
   const HIGHER_TF_MAP = {
-    5:    60,    // 5 min  → 1 hora
-    15:   240,   // 15 min → 4 horas
-    30:   240,   // 30 min → 4 horas
-    60:   240,   // 1 hora → 4 horas
-    240:  1440,  // 4 horas → 1 día
-    720:  1440,  // 12 horas → 1 día
+    5: 60,    // 5 min  → 1 hora
+    15: 240,   // 15 min → 4 horas
+    30: 240,   // 30 min → 4 horas
+    60: 240,   // 1 hora → 4 horas
+    240: 1440,  // 4 horas → 1 día
+    720: 1440,  // 12 horas → 1 día
     1440: null,  // 1 día → no hay superior
   };
 

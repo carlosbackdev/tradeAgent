@@ -46,14 +46,14 @@ export class TelegramCommands {
             case '/venice': await this.handlers.handleCoinCommand('VENICE'); break;
             case '/xrp': await this.handlers.handleCoinCommand('XRP'); break;
             case '/stats': await this.handlers.handleTradingStats(); break;
-            
+
             // Admin commands
             case '/admin':
                 if (isAdmin) await this.handlers.handleAdminMenu();
                 else await this.sendMessage('❓ Comando reservado para el administrador.');
                 break;
-            case '/invite': 
-                if (isAdmin) await this.handlers.handleInvite(args); 
+            case '/invite':
+                if (isAdmin) await this.handlers.handleInvite(args);
                 else await this.sendMessage('❓ Comando reservado para el administrador.');
                 break;
             case '/users':

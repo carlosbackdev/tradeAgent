@@ -23,7 +23,7 @@ async function main() {
 
   try {
     await startMultiUserBot();
-    
+
     console.log('\n✅ Multi-user bot en marcha.');
     console.log('   Comandos de admin: /invite, /users, /revoke, /admin_status\n');
   } catch (err) {

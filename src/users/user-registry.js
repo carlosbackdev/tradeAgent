@@ -21,8 +21,8 @@ async function getDb() {
   // Pending-invite users have no telegram_id field, so they are excluded from the index
   // entirely, allowing unlimited pending invitations without key conflicts.
   try {
-    await _db.collection('users').dropIndex('telegram_id_1').catch(() => {});
-    await _db.collection('users').dropIndex('telegram_id_sparse').catch(() => {});
+    await _db.collection('users').dropIndex('telegram_id_1').catch(() => { });
+    await _db.collection('users').dropIndex('telegram_id_sparse').catch(() => { });
   } catch { /* ignore */ }
 
   await _db.collection('users').createIndex(
@@ -117,11 +117,11 @@ export async function claimInvite(telegramId, telegramUsername) {
     // We look for ANY user with this username. 
     // If they are 'pending_invite' or 'pending_setup', we link them.
     user = await col.findOne({ telegram_username: username });
-    
+
     if (user) {
       if (user.status === 'suspended') {
         logger.warn(`Attempt to claim invite by suspended user @${username}`);
-        return user; 
+        return user;
       }
 
       if (!user.telegram_id || user.status === 'pending_invite') {
@@ -170,7 +170,7 @@ export async function claimInviteByCode(telegramId, inviteCode, telegramUsername
   // If already claimed by ANOTHER ID
   if (user.telegram_id && user.telegram_id !== idStr) {
     logger.warn(`Invite code ${normalizedCode} already claimed by different ID: ${user.telegram_id}`);
-    return null; 
+    return null;
   }
 
   const normalizedUsername = (telegramUsername || user.telegram_username || '').replace('@', '').toLowerCase();

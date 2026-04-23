@@ -34,7 +34,7 @@ export class UserSession {
     const isAdmin = ADMIN_ID && currentId === ADMIN_ID;
 
     if (isAdmin) logger.info(`👑 Session ${this.userId} initialized with ADMIN privileges`);
-    
+
     this.botContext = {
       isAdmin: !!isAdmin,
       chatId: this.userId,
@@ -63,7 +63,7 @@ export class UserSession {
     }
 
     // Send init message
-    await this.handlers.handleInit().catch(() => {});
+    await this.handlers.handleInit().catch(() => { });
     logger.info(`✅ UserSession initialized for @${this.username}`);
   }
 
@@ -100,7 +100,7 @@ export class UserSession {
       if (!apiKey || apiKey.length < 10 || !apiKey.startsWith('sk-')) {
         this._send(`❌ <b>ANTHROPIC_API_KEY inválida</b>
 
-La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode: 'HTML' }).catch(() => {});
+La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode: 'HTML' }).catch(() => { });
         return false;
       }
     }

@@ -21,11 +21,11 @@ export function computeIndicators(closes) {
     return { error: 'Not enough data (need ≥26 closes)' };
   }
 
-  const rsiValues     = RSI.calculate({ values: closes, period: 14 });
-  const sma20         = SMA.calculate({ values: closes, period: 20 });
-  const ema12         = EMA.calculate({ values: closes, period: 12 });
-  const ema26         = EMA.calculate({ values: closes, period: 26 });
-  const macdValues    = MACD.calculate({
+  const rsiValues = RSI.calculate({ values: closes, period: 14 });
+  const sma20 = SMA.calculate({ values: closes, period: 20 });
+  const ema12 = EMA.calculate({ values: closes, period: 12 });
+  const ema26 = EMA.calculate({ values: closes, period: 26 });
+  const macdValues = MACD.calculate({
     values: closes,
     fastPeriod: 12,
     slowPeriod: 26,
@@ -33,7 +33,7 @@ export function computeIndicators(closes) {
     SimpleMAOscillator: false,
     SimpleMASignal: false,
   });
-  const bbValues      = BollingerBands.calculate({
+  const bbValues = BollingerBands.calculate({
     values: closes,
     period: 20,
     stdDev: 2,
@@ -46,41 +46,41 @@ export function computeIndicators(closes) {
   const currentPrice = last(closes);
   const macd = last(macdValues) ?? {};
   const prevMacd = secondLast(macdValues) ?? {};
-  const bb   = last(bbValues)   ?? {};
+  const bb = last(bbValues) ?? {};
 
   const result = {
     currentPrice,
-    rsi14:          last(rsiValues)?.toFixed(2),
-    sma20:          last(sma20)?.toFixed(2),
-    ema12:          last(ema12)?.toFixed(2),
-    ema26:          last(ema26)?.toFixed(2),
+    rsi14: last(rsiValues)?.toFixed(2),
+    sma20: last(sma20)?.toFixed(2),
+    ema12: last(ema12)?.toFixed(2),
+    ema26: last(ema26)?.toFixed(2),
 
     // MACD
-    macdLine:       macd.MACD?.toFixed(4),
-    macdSignal:     macd.signal?.toFixed(4),
-    macdHistogram:  macd.histogram?.toFixed(4),
+    macdLine: macd.MACD?.toFixed(4),
+    macdSignal: macd.signal?.toFixed(4),
+    macdHistogram: macd.histogram?.toFixed(4),
 
     // Bollinger Bands
-    bbUpper:        bb.upper?.toFixed(2),
-    bbMiddle:       bb.middle?.toFixed(2),
-    bbLower:        bb.lower?.toFixed(2),
-    bbWidth:        bb.upper && bb.lower
-                      ? ((bb.upper - bb.lower) / bb.middle * 100).toFixed(2) + '%'
-                      : null,
+    bbUpper: bb.upper?.toFixed(2),
+    bbMiddle: bb.middle?.toFixed(2),
+    bbLower: bb.lower?.toFixed(2),
+    bbWidth: bb.upper && bb.lower
+      ? ((bb.upper - bb.lower) / bb.middle * 100).toFixed(2) + '%'
+      : null,
 
     // Price position relative to bands
-    bbPosition:     bb.upper && bb.lower
-                      ? ((currentPrice - bb.lower) / (bb.upper - bb.lower) * 100).toFixed(1) + '%'
-                      : null,
+    bbPosition: bb.upper && bb.lower
+      ? ((currentPrice - bb.lower) / (bb.upper - bb.lower) * 100).toFixed(1) + '%'
+      : null,
 
     // Simple signals derived from indicators
-    signals: deriveSignals({ 
-      currentPrice, 
-      rsi: last(rsiValues), 
-      macd, 
-      prevMacd, 
-      bb, 
-      ema12: last(ema12), 
+    signals: deriveSignals({
+      currentPrice,
+      rsi: last(rsiValues),
+      macd,
+      prevMacd,
+      bb,
+      ema12: last(ema12),
       ema26: last(ema26)
     }),
   };
@@ -109,12 +109,12 @@ function deriveSignals({ currentPrice, rsi, macd, prevMacd, bb, ema12, ema26 }) 
   if (macd?.MACD !== undefined && macd?.signal !== undefined) {
     if (macd.MACD > macd.signal) signals.push('MACD_BULLISH_CROSS');
     else signals.push('MACD_BEARISH_CROSS');
-    
+
     // Proper momentum check comparing to previous histogram
     if (macd.histogram > (prevMacd.histogram || 0)) {
-        signals.push('MACD_MOMENTUM_INCREASING');
+      signals.push('MACD_MOMENTUM_INCREASING');
     } else {
-        signals.push('MACD_MOMENTUM_DECREASING');
+      signals.push('MACD_MOMENTUM_DECREASING');
     }
   }
 
@@ -141,19 +141,19 @@ function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
 
   // RSI
   if (rsi !== undefined) {
-    if (rsi < 35)       bullish.push('RSI_oversold');
-    else if (rsi > 65)  bearish.push('RSI_overbought');
+    if (rsi < 35) bullish.push('RSI_oversold');
+    else if (rsi > 65) bearish.push('RSI_overbought');
   }
 
   // MACD histogram direction
   if (macdHistogram !== undefined) {
     if (macdHistogram > 0) bullish.push('MACD_bullish_histogram');
-    else                   bearish.push('MACD_bearish_histogram');
+    else bearish.push('MACD_bearish_histogram');
   }
 
   // EMA cross
   if (signals.includes('EMA_GOLDEN_CROSS')) bullish.push('EMA_golden_cross');
-  if (signals.includes('EMA_DEATH_CROSS'))  bearish.push('EMA_death_cross');
+  if (signals.includes('EMA_DEATH_CROSS')) bearish.push('EMA_death_cross');
 
   // MACD cross
   if (signals.includes('MACD_BULLISH_CROSS')) bullish.push('MACD_bullish_cross');
@@ -162,7 +162,7 @@ function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
   // Bollinger Band position (numeric, strip '%')
   const bbPct = parseFloat(bbPosition);
   if (!isNaN(bbPct)) {
-    if (bbPct < 20)      bullish.push('BB_oversold_zone');
+    if (bbPct < 20) bullish.push('BB_oversold_zone');
     else if (bbPct > 80) bearish.push('BB_overbought_zone');
   }
 
@@ -172,15 +172,15 @@ function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
 
   const suggestion =
     bullish.length >= 2 && bullish.length > bearish.length ? 'BUY_SIGNAL'
-    : bearish.length >= 2 && bearish.length > bullish.length ? 'SELL_SIGNAL'
-    : 'NEUTRAL';
+      : bearish.length >= 2 && bearish.length > bullish.length ? 'SELL_SIGNAL'
+        : 'NEUTRAL';
 
   return {
-    bullishCount:   bullish.length,
-    bearishCount:   bearish.length,
+    bullishCount: bullish.length,
+    bearishCount: bearish.length,
     bullishSignals: bullish,
     bearishSignals: bearish,
-    suggestion,     
+    suggestion,
   };
 }
 
@@ -189,7 +189,7 @@ function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
  */
 export function closesFromTrades(trades) {
   if (!trades || !Array.isArray(trades)) return [];
-  
+
   return trades.map(t => {
     if (Array.isArray(t)) return parseFloat(t[1]);
     if (t.price) return parseFloat(t.price);

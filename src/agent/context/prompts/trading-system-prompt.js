@@ -80,7 +80,7 @@ RESPONSE: strict JSON only, no markdown, no extra text:
 {
   "decisions": [
     {
-      "symbol": "BTC/USD",
+      "symbol": "BTC-USD",
       "action": "BUY" | "SELL" | "HOLD",
       "orderType": "market" | "limit" | null,
       "limitPrice": null | "65000.00",
