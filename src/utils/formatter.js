@@ -89,7 +89,7 @@ export function formatOpenOrdersMessage({ symbol, results }) {
   }
 
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `✅ <b>Procesadas:</b> ${results.cancelled || 0} canceladas, ${results.buy_more_count || 0} buy_more, ${results.kept || 0} mantenidas`;
+  msg += `✅ <b>Procesadas:</b> ${results.cancelled || 0} canceladas, ${results.buy_more_count || 0} compras adicionales, ${results.kept || 0} mantenidas`;
 
   return msg;
 }

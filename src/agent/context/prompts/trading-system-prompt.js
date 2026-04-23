@@ -7,8 +7,6 @@ import { getHoldConfidenceThreshold } from './confidence-threshold.js';
 
 export const getSystemPrompt = (tradingConfig) => {
   const { visionAgent, personalityAgent, takeProfitPct, stopLossPct, maxTradeSize, minOrderUsd } = tradingConfig;
-  const maxPct = Number(maxTradeSize) || 25;
-  const effectiveMaxTradeSize = maxPct / 100;
   const holdThreshold = getHoldConfidenceThreshold(personalityAgent);
   const effectiveMinOrderUsd = Number(minOrderUsd ?? 0);
 
@@ -41,7 +39,7 @@ Priority inside botState: openLots is the primary live position source of truth.
 - higherTimeframe: Macro trend context 
 — entry decisions should align with this (optional)
 - previousDecisions: Recent decision history to avoid flip-flopping
-- trading limits from config: MAX_POSITION_PCT=${effectiveMaxTradeSize}, MIN_ORDER_PCT=${effectiveMinOrderUsd}, TAKE_PROFIT_PCT=${takeProfitPct || '2-3'}, STOP_LOSS_PCT=${stopLossPct || '1-2'}
+- trading limits from config: MAX_POSITION_PCT=${maxTradeSize}, MIN_ORDER_PCT=${effectiveMinOrderUsd}, TAKE_PROFIT_PCT=${takeProfitPct || '2-3'}, STOP_LOSS_PCT=${stopLossPct || '1-2'}
 
 Decide: BUY, SELL, or HOLD for each pair. Use the technical indicators and the "confluence" suggestion as a weak directional hint, not as a final decision. Prioritize exchange reality, open position state, ATR-relative move significance, and regimeSummary. Calculate TP/SL levels.
 
@@ -57,10 +55,10 @@ If volatility is high, widen TP/SL and lower confidence unless confluence is str
 
 RULES:
 1. Only trade with clear confluence of ≥2 indicators agreeing
-2. positionPct is a decimal 0–1 representing the fraction of available balance to use. CEILING is ${maxPct}% — never exceed it. But the actual value you choose MUST reflect your confidence:
-   - Very high confidence (85-100): positionPct up to ${maxPct}% ceiling
-   - High confidence (70-84):      positionPct 40–80% of ceiling (e.g. ${Math.round(maxPct * 0.5)}%)
-   - Moderate confidence (${holdThreshold}-69):  positionPct 15–50% of ceiling (e.g. ${Math.round(maxPct * 0.2)}%)
+2. positionPct is a decimal 0–1 representing the fraction of available balance to use. CEILING is ${maxTradeSize}% — never exceed it. But the actual value you choose MUST reflect your confidence:
+   - Very high confidence (85-100): positionPct up to ${maxTradeSize}% ceiling
+   - High confidence (70-84):      positionPct 40–80% of ceiling
+   - Moderate confidence (${holdThreshold}-69):  positionPct 15–50% of ceiling
    - Low confidence (<${holdThreshold}):  HOLD — do not trade
    - Partial sizes are the norm.
 3. BUY → positionPct = % of available tradable USD balance to spend. SELL → positionPct = % of available sellable coin balance for that symbol.
@@ -86,7 +84,7 @@ RESPONSE: strict JSON only, no markdown, no extra text:
       "action": "BUY" | "SELL" | "HOLD",
       "orderType": "market" | "limit" | null,
       "limitPrice": null | "65000.00",
-      "positionPct": 0.20,
+      "positionPct": 20,
       "takeProfit": "67000.00" | null,
       "stopLoss": "63500.00" | null,
       "confidence": 72,
@@ -98,5 +96,4 @@ RESPONSE: strict JSON only, no markdown, no extra text:
 }
 HOLD → positionPct: 0, orderType: null, takeProfit: null, stopLoss: null.`;
 };
-
 

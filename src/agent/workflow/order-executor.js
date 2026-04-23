@@ -43,9 +43,13 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
     }
 
     let usd = null;
-    const rawPositionPct = Number(d.positionPct ?? 0);
+    let rawPositionPct = Number(d.positionPct ?? 0);
+    // Failsafe: if Claude returns a decimal (e.g. 0.20) instead of a percentage (20), convert it
+    if (rawPositionPct > 0 && rawPositionPct <= 1) {
+      rawPositionPct = rawPositionPct * 100;
+    }
     const positionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
-      ? clamp(rawPositionPct, 0, config.trading.maxTradeSize / 100)
+      ? clamp(rawPositionPct, 0, config.trading.maxTradeSize) / 100
       : 0;
 
     if (positionPct > 0) {

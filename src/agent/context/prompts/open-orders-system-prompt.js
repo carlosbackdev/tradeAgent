@@ -72,7 +72,7 @@ RESPONSE: strict JSON only, no markdown, no extra text:
       "action": "KEEP" | "CANCEL" | "BUY_MORE",
       "orderType": "market" | null,
       "limitPrice": null,
-      "positionPct": 0.20,
+      "positionPct": 20,
       "takeProfit": null,
       "stopLoss": null,
       "confidence": 72,

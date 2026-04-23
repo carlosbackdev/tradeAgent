@@ -254,6 +254,27 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
         effectiveConfig
       );
 
+      if (processResult.kept > 0) {
+
+        try {
+          const openOrdersMessage = formatOpenOrdersMessage({ symbol: coin, results: processResult });
+          await notify(openOrdersMessage, chatId);
+
+        } catch (err) {
+          logger.warn(`⚠️ Failed to send open orders notification: ${err.message}`);
+        }
+
+        return {
+          decision: null,
+          execResults: [],
+          stats: {
+            executedCount: 0,
+            skippedCount: 1,
+            errorCount: 0,
+            reason: 'open_orders_changed_state'
+          }
+        };
+      }
       if (processResult.status === 'error') {
         await notify(`❌ *${coin}*: Open orders failed: ${processResult.error}`, chatId).catch(() => { });
         logger.warn(`⚠️ Open orders processing failed for ${coin}. Continuing with main flow.`);

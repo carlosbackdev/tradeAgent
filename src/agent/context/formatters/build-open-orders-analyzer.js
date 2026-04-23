@@ -193,7 +193,7 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol, tradingC
       },
     },
 
-    your_task: 'Decide: "keep" (leave as-is), "cancel" (remove order), or "buy_more" (place additional BUY). Return action, reasoning, confidence (0-100), and positionPct if buy_more.',
+    your_task: 'Decide: "keep" (leave as-is), "cancel" (remove order), or "buy" (place additional BUY). Return action, reasoning, confidence (0-100), and positionPct if buy.',
   };
 
   return JSON.stringify(analysisData, null, 2);
