@@ -42,9 +42,9 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
         const qtyDisplay = result.orderResult?.qty || result.qty || 'pte.';
         msg += `  ✅ <b>Estado:</b> EJECUTADO (${qtyDisplay})\n`;
       } else if (result.status === 'skipped') {
-        msg += `  ⏭️ <b>Estado:</b> SKIPPED (${result.reason})\n`;
+        msg += `  ⏭️ <b>Estado:</b> SKIPPED (${escapeHTML(result.reason)})\n`;
       } else if (result.status === 'error') {
-        msg += `  ❌ <b>Estado:</b> ERROR (${result.error})\n`;
+        msg += `  ❌ <b>Estado:</b> ERROR (${escapeHTML(result.error)})\n`;
       }
 
       msg += `\n💡 <b>RAZONAMIENTO</b>\n`;

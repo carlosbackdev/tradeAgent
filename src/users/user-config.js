@@ -33,6 +33,12 @@ export function buildUserConfig(user) {
   const parseMaxTradeSize = (val, fallback) => {
     let n = parseFloat(String(val || '').replace(',', '.'));
     if (isNaN(n) || n <= 0) return fallback;
+    
+    // Auto-migrate legacy decimal configs (e.g. 0.25 -> 25%, 1 -> 100%)
+    if (n <= 1) {
+      n = n * 100;
+    }
+    
     return Math.min(100, n);
   };
 

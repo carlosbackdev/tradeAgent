@@ -10,16 +10,24 @@ import { logger } from '../../utils/logger.js';
 import { getAvailableUsdReal, getAvailableCoinReal } from './available-balance.js';
 import { getHoldConfidenceThreshold } from '../context/prompts/confidence-threshold.js';
 
-// ── Position-sizing helpers ────────────────────────────────────────
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-export async function executeDecisions(decisions, coin, balanceArray, openOrders, realAvailableBalances, indicators, config, rendimiento = null, dbConnected = false, chatId = null, managedPositions = []) {
+export async function executeDecisions(
+  decisions,
+  coin,
+  balanceArray,
+  openOrders,
+  realAvailableBalances,
+  indicators,
+  config,
+  rendimiento = null,
+  dbConnected = false,
+  chatId = null,
+  managedPositions = []
+) {
   const execResults = [];
   let executedCount = 0, skippedCount = 0, errorCount = 0;
+
   const holdThreshold = getHoldConfidenceThreshold(config.trading?.personalityAgent);
+  const maxTradeSizePct = normalizeMaxTradeSizePct(config.trading?.maxTradeSize);
 
   // Initialize OrderManager for placing orders
   const { RevolutClient } = await import('../../revolut/client.js');
@@ -43,21 +51,28 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
     }
 
     let usd = null;
-    let rawPositionPct = Number(d.positionPct ?? 0);
-    // Failsafe: if Claude returns a decimal (e.g. 0.20) instead of a percentage (20), convert it
-    if (rawPositionPct > 0 && rawPositionPct <= 1) {
-      rawPositionPct = rawPositionPct * 100;
-    }
-    const positionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
-      ? clamp(rawPositionPct, 0, config.trading.maxTradeSize) / 100
+
+    const rawPositionPct = normalizeClaudePositionPct(d.positionPct ?? 0);
+
+    const effectivePositionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
+      ? clamp(rawPositionPct, 0, maxTradeSizePct)
       : 0;
 
-    if (positionPct > 0) {
-      // ── positionPct mode (new) ──────────────────────────────
+    const positionPctDecimal = effectivePositionPct / 100;
+
+    if (positionPctDecimal > 0) {
+      // ── positionPct mode ────────────────────────────────────
       if (d.action === 'BUY') {
-        const usdBalance = Number(realAvailableBalances?.availableByCurrency?.USD ?? getAvailableUsdReal(balanceArray, openOrders));
-        usd = usdBalance * positionPct;
-        logger.info(`📐 BUY positionPct=${(positionPct * 100).toFixed(0)}% of $${usdBalance.toFixed(2)} USD → $${usd.toFixed(2)}`);
+        const usdBalance = Number(
+          realAvailableBalances?.availableByCurrency?.USD ??
+          getAvailableUsdReal(balanceArray, openOrders)
+        );
+
+        usd = usdBalance * positionPctDecimal;
+
+        logger.info(
+          `📐 BUY positionPct=${effectivePositionPct.toFixed(0)}% of $${usdBalance.toFixed(2)} USD → $${usd.toFixed(2)}`
+        );
       }
 
       if (d.action === 'SELL') {
@@ -68,8 +83,12 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
         // Option B: Sell ONLY based on bot-managed positions
         const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
         const coinManagedBalance = managedPos ? managedPos.qty : 0;
-        const coinAvailableReal = Number(realAvailableBalances?.availableByCurrency?.[baseCurrency]
-          ?? getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol));
+
+        const coinAvailableReal = Number(
+          realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
+          getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol)
+        );
+
         const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
 
         if (currentPrice <= 0) {
@@ -79,9 +98,12 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
           continue;
         }
 
-        const qtyToSell = coinSellable * positionPct;
+        const qtyToSell = coinSellable * positionPctDecimal;
         usd = qtyToSell * currentPrice;
-        logger.info(`📐 SELL positionPct=${(positionPct * 100).toFixed(0)}% of sellable ${coinSellable.toFixed(6)} ${baseCurrency} → $${usd.toFixed(2)}`);
+
+        logger.info(
+          `📐 SELL positionPct=${effectivePositionPct.toFixed(0)}% of sellable ${coinSellable.toFixed(6)} ${baseCurrency} → $${usd.toFixed(2)}`
+        );
       }
     } else {
       // ── Legacy usdAmount mode (backward compat) ────────────
@@ -93,26 +115,43 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
         const baseCurrency = d.symbol.split('-')[0];
         const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
         const coinManagedBalance = managedPos ? managedPos.qty : 0;
-        const coinAvailableReal = Number(realAvailableBalances?.availableByCurrency?.[baseCurrency]
-          ?? getAvailableCoinReal(balanceArray, openOrders, d.symbol));
+
+        const coinAvailableReal = Number(
+          realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
+          getAvailableCoinReal(balanceArray, openOrders, d.symbol)
+        );
+
         const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
         const normalizedSymbol = d.symbol.replace('/', '-');
         const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
+
         usd = parseFloat((coinSellable * currentPrice).toFixed(2));
-        logger.info(`💱 SELL auto-fill (legacy sellable): ${coinSellable} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`);
+
+        logger.info(
+          `💱 SELL auto-fill (legacy sellable): ${coinSellable} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`
+        );
       }
     }
 
-    // Store calculated positionPct back on decision for auditing
-    d.positionPct = positionPct;
+    // Store normalized decimal positionPct back on decision for auditing/persistence
+    d.positionPct = positionPctDecimal;
 
     usd = parseFloat((usd || 0).toFixed(2));
     d.usdAmount = usd;
 
     if (d.action === 'BUY') {
-      const usdAvailable = Number(realAvailableBalances?.availableByCurrency?.USD ?? getAvailableUsdReal(balanceArray, openOrders));
+      const usdAvailable = Number(
+        realAvailableBalances?.availableByCurrency?.USD ??
+        getAvailableUsdReal(balanceArray, openOrders)
+      );
+
       if (usd > usdAvailable + 0.01) {
-        execResults.push({ ...d, rendimiento, status: 'skipped', reason: `Insufficient available USD ($${usdAvailable.toFixed(2)}) after open BUY limits` });
+        execResults.push({
+          ...d,
+          rendimiento,
+          status: 'skipped',
+          reason: `Insufficient available USD ($${usdAvailable.toFixed(2)}) after open BUY limits`
+        });
         skippedCount++;
         continue;
       }
@@ -122,16 +161,26 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
       const normalizedSymbol = d.symbol.replace('/', '-');
       const baseCurrency = normalizedSymbol.split('-')[0];
       const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
+
       const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
       const coinManagedBalance = managedPos ? managedPos.qty : 0;
-      const coinAvailableReal = Number(realAvailableBalances?.availableByCurrency?.[baseCurrency]
-        ?? getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol));
+
+      const coinAvailableReal = Number(
+        realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
+        getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol)
+      );
+
       const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
 
       if (currentPrice > 0) {
         const qtyNeeded = usd / currentPrice;
         if (qtyNeeded > coinSellable + 0.00000001) {
-          execResults.push({ ...d, rendimiento, status: 'skipped', reason: `Insufficient available ${baseCurrency} (${coinSellable.toFixed(8)}) after open SELL limits` });
+          execResults.push({
+            ...d,
+            rendimiento,
+            status: 'skipped',
+            reason: `Insufficient available ${baseCurrency} (${coinSellable.toFixed(8)}) after open SELL limits`
+          });
           skippedCount++;
           continue;
         }
@@ -140,7 +189,12 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
 
     const minOrder = config.trading.minOrderUsd;
     if (isNaN(usd) || usd < minOrder) {
-      execResults.push({ ...d, rendimiento, status: 'skipped', reason: `Amount $${usd} < minimum $${minOrder}` });
+      execResults.push({
+        ...d,
+        rendimiento,
+        status: 'skipped',
+        reason: `Amount $${usd} < minimum $${minOrder}`
+      });
       skippedCount++;
       continue;
     }
@@ -244,4 +298,30 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
   }
 
   return { execResults, executedCount, skippedCount, errorCount };
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeClaudePositionPct(rawValue) {
+  const n = Number(rawValue);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+
+  if (n > 0 && n <= 1) {
+    return n * 100;
+  }
+
+  return n;
+}
+
+function normalizeMaxTradeSizePct(rawValue) {
+  const n = Number(rawValue);
+  if (!Number.isFinite(n) || n <= 0) return 25;
+
+  if (n > 0 && n <= 1) {
+    return n * 100;
+  }
+
+  return n;
 }
