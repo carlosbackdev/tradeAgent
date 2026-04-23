@@ -46,12 +46,6 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
       priceChangeSinceLastAnalysisPct: context.priceChangeSinceLastAnalysisPct ?? 0,
       currentPrice: context.currentPrice ?? null,
       lastPrice: context.lastPrice ?? null,
-      constraints: {
-        MAX_TRADE_SIZE: effectiveMaxTradeSize,
-        MIN_ORDER: activeTradingConfig.minOrderUsd,
-        TAKE_PROFIT_PCT: activeTradingConfig.takeProfitPct,
-        STOP_LOSS_PCT: activeTradingConfig.stopLossPct,
-      },
     },
   };
 

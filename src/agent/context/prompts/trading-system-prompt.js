@@ -6,10 +6,11 @@
 import { getHoldConfidenceThreshold } from './confidence-threshold.js';
 
 export const getSystemPrompt = (tradingConfig) => {
-  const { visionAgent, personalityAgent, takeProfitPct, stopLossPct, maxTradeSize } = tradingConfig;
+  const { visionAgent, personalityAgent, takeProfitPct, stopLossPct, maxTradeSize, minOrderUsd } = tradingConfig;
   const effectiveMaxTradeSize = normalizeMaxTradeSize(maxTradeSize);
   const maxPct = Math.round(effectiveMaxTradeSize * 100);
   const holdThreshold = getHoldConfidenceThreshold(personalityAgent);
+  const effectiveMinOrderUsd = Number(minOrderUsd ?? 0);
 
   return `You are an autonomous crypto trading agent operating on Revolut X.
 You have a ${personalityAgent.toUpperCase()} personality and a ${visionAgent.toUpperCase()} investment vision.
@@ -40,7 +41,7 @@ Priority inside botState: openLots is the primary live position source of truth.
 - higherTimeframe: Macro trend context 
 — entry decisions should align with this (optional)
 - previousDecisions: Recent decision history to avoid flip-flopping
-- constraints: Trading limits (MAX_TRADE_SIZE, MIN_ORDER, etc.)
+- trading limits from config: MAX_POSITION_PCT=${effectiveMaxTradeSize}, MIN_ORDER_PCT=${effectiveMinOrderUsd}, TAKE_PROFIT_PCT=${takeProfitPct || '2-3'}, STOP_LOSS_PCT=${stopLossPct || '1-2'}
 
 Decide: BUY, SELL, or HOLD for each pair. Use the technical indicators and the "confluence" suggestion as a weak directional hint, not as a final decision. Prioritize exchange reality, open position state, ATR-relative move significance, and regimeSummary. Calculate TP/SL levels.
 
@@ -61,7 +62,7 @@ RULES:
    - High confidence (70-84):      positionPct 40–80% of ceiling (e.g. ${Math.round(maxPct * 0.5)}%)
    - Moderate confidence (${holdThreshold}-69):  positionPct 15–50% of ceiling (e.g. ${Math.round(maxPct * 0.2)}%)
    - Low confidence (<${holdThreshold}):  HOLD — do not trade
-   Use the full ceiling ONLY for exceptional, multi-indicator, low-risk setups. Partial sizes are the norm.
+   - Partial sizes are the norm.
 3. BUY → positionPct = % of available tradable USD balance to spend. SELL → positionPct = % of available sellable coin balance for that symbol.
 4. Partial SELL is encouraged: lock in gains progressively instead of always selling 100%.
 5. Don't BUY without USD balance. Don't SELL without crypto balance.
