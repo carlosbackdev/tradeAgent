@@ -239,7 +239,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     logger.info(`🔍 Open orders: ${openOrdersThisCoin.length} for ${coin}, ${openOrdersOtherCoins.length} for other coins`);
 
-    // Case 1: Orders for THIS coin (ANY balance) → Procesa with FULL context y RETORNA
+    // Case 1: Orders for THIS coin (ANY balance) → Procesa with FULL context y CONTINUA
     if (openOrdersThisCoin.length > 0) {
       logger.info(`📋 Processing ${openOrdersThisCoin.length} open order(s) for ${coin} with full context...`);
       const processResult = await processOpenOrders(
@@ -256,26 +256,17 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
       if (processResult.status === 'error') {
         await notify(`❌ *${coin}*: Open orders failed: ${processResult.error}`, chatId).catch(() => { });
-        return {
-          decision: null,
-          execResults: [],
-          stats: { executedCount: 0, skippedCount: 1, errorCount: 1, reason: 'open_orders_error' }
-        };
+        logger.warn(`⚠️ Open orders processing failed for ${coin}. Continuing with main flow.`);
+      } else {
+        logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
+        try {
+          const openOrdersMessage = formatOpenOrdersMessage({ symbol: coin, results: processResult });
+          await notify(openOrdersMessage, chatId);
+          logger.info('📤 Open orders Telegram notification sent');
+        } catch (err) {
+          logger.warn(`⚠️ Failed to send open orders notification: ${err.message}`);
+        }
       }
-
-      logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
-      try {
-        const openOrdersMessage = formatOpenOrdersMessage({ symbol: coin, results: processResult });
-        await notify(openOrdersMessage, chatId);
-        logger.info('📤 Open orders Telegram notification sent');
-      } catch (err) {
-        logger.warn(`⚠️ Failed to send open orders notification: ${err.message}`);
-      }
-      return {
-        decision: null,
-        execResults: [],
-        stats: { executedCount: 0, skippedCount: 1, errorCount: 0, reason: 'open_orders_processed' }
-      };
     }
 
     // If NO open orders → continue normally (skip this section)

@@ -10,19 +10,6 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
 
   const usableBalances = JSON.parse(JSON.stringify(context.balances || {}));
 
-  if (usableBalances.usd) {
-    usableBalances.usd = parseFloat((usableBalances.usd * 0.99).toFixed(2));
-  }
-
-  if (usableBalances.crypto) {
-    for (const coin in usableBalances.crypto) {
-      if (usableBalances.crypto[coin].estimatedUsdValue) {
-        usableBalances.crypto[coin].amount = usableBalances.crypto[coin].amount * 0.99;
-        usableBalances.crypto[coin].estimatedUsdValue = parseFloat((usableBalances.crypto[coin].estimatedUsdValue * 0.99).toFixed(2));
-      }
-    }
-  }
-
   const openOrders = Array.isArray(context.openOrders) ? context.openOrders : [];
   const marketData = context.pairs || [];
   const normalizedIndicatorsBySymbol = normalizeIndicatorsBySymbol(context.indicators || {});

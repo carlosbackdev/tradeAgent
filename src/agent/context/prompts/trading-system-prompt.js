@@ -3,11 +3,13 @@
  * The brain of the agent.
  */
 
+import { getHoldConfidenceThreshold } from './confidence-threshold.js';
+
 export const getSystemPrompt = (tradingConfig) => {
   const { visionAgent, personalityAgent, takeProfitPct, stopLossPct, maxTradeSize } = tradingConfig;
   const effectiveMaxTradeSize = normalizeMaxTradeSize(maxTradeSize);
   const maxPct = Math.round(effectiveMaxTradeSize * 100);
-  const holdThreshold = personalityAgent === 'aggressive' ? 40 : personalityAgent === 'conservative' ? 55 : 45;
+  const holdThreshold = getHoldConfidenceThreshold(personalityAgent);
 
   return `You are an autonomous crypto trading agent operating on Revolut X.
 You have a ${personalityAgent.toUpperCase()} personality and a ${visionAgent.toUpperCase()} investment vision.
@@ -25,7 +27,7 @@ You receive market data in THREE LAYERS:
 - lastExecutedOrder: Previous order details (auxiliary legacy fallback only)
 - rendimiento: Weighted unrealized P&L% across all open lots THIS symbol
 - tradingStats: Accumulated metrics (winRate, closedTrades, accumulatedRendimiento)
-- managedPositions: Alias for openLots
+- managedPositions: Aggregated managed exposure by symbol (summary view), distinct from openLots
 - currentPrice / lastPrice / priceChangeSinceLastAnalysisPct: Price context
 
 Priority inside botState: openLots is the primary live position source of truth. recentSells adds context. lastExecutedOrder is auxiliary only and must never override openLots or recentSells.
@@ -71,6 +73,7 @@ RULES:
 11. Personality: ${personalityAgent.toUpperCase()} → adjust entry/exit aggression accordingly.
 12. Vision: ${visionAgent.toUpperCase()}-term → prioritize trends matching this horizon.
 13. If the input contains a "question" field, prioritize answering it in "reasoning" and "marketSummary".
+14. HOLD breakout rule: if there are 3 consecutive recent HOLD decisions for the same symbol, you may break the pattern with BUY or SELL only when there is clear directional confirmation. Use recentMarketContext and priceChangeSinceLastAnalysisPct as supporting context for that confirmation. For BUY, require 2 small consecutive bullish candles, MACD bullish cross or bullish bias with improving histogram, price recovering EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. For SELL, require 2 small consecutive bearish candles, MACD bearish cross or bearish bias with worsening histogram, price losing EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. If that confirmation is not present, HOLD remains valid.
 
 Write "marketSummary", "reasoning" and "risks" in Spanish. All other fields in English.
 

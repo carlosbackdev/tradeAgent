@@ -40,7 +40,7 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
     placed_at_price: toNumber(openOrder.price ?? openOrder.limit_price ?? currentPrice, currentPrice),
     current_price: currentPrice,
     status: openOrder.state || openOrder.status || 'pending',
-    created_at: openOrder.created_at || new Date().toISOString(),
+    created_at: createdAtMs ? new Date(createdAtMs).toISOString() : null,
   };
 
   const priceDiff = orderContext.placed_at_price

@@ -3,11 +3,13 @@
  * System prompt for open order analysis (KEEP/CANCEL/BUY_MORE decisions)
  */
 
+import { getHoldConfidenceThreshold } from './confidence-threshold.js';
+
 export function getOpenOrderSystemPrompt(tradingConfig = {}) {
   const { personalityAgent = 'moderate', visionAgent = 'short', maxTradeSize = 0.25 } = tradingConfig;
   const effectiveMaxTradeSize = normalizeMaxTradeSize(maxTradeSize);
   const maxPct = Math.round(effectiveMaxTradeSize * 100);
-  const holdThreshold = personalityAgent === 'aggressive' ? 40 : personalityAgent === 'conservative' ? 55 : 45;
+  const holdThreshold = getHoldConfidenceThreshold(personalityAgent);
 
   return `You are an expert crypto trading assistant with a ${personalityAgent.toUpperCase()} personality and ${visionAgent.toUpperCase()}-term vision, analyzing pending (open) orders on Revolut X.
 

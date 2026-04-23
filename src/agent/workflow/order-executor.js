@@ -8,6 +8,7 @@ import { notifyOrderExecuted, notifyError } from '../../telegram/handles.js';
 import { saveOrder, applySellToOpenLots } from '../../services/mongo/mongo-service.js';
 import { logger } from '../../utils/logger.js';
 import { getAvailableUsdReal, getAvailableCoinReal } from './available-balance.js';
+import { getHoldConfidenceThreshold } from '../context/prompts/confidence-threshold.js';
 
 // ── Position-sizing helpers ────────────────────────────────────────
 
@@ -18,6 +19,7 @@ function clamp(value, min, max) {
 export async function executeDecisions(decisions, coin, balanceArray, openOrders, realAvailableBalances, indicators, config, rendimiento = null, dbConnected = false, chatId = null, managedPositions = []) {
   const execResults = [];
   let executedCount = 0, skippedCount = 0, errorCount = 0;
+  const holdThreshold = getHoldConfidenceThreshold(config.trading?.personalityAgent);
 
   // Initialize OrderManager for placing orders
   const { RevolutClient } = await import('../../revolut/client.js');
@@ -34,7 +36,7 @@ export async function executeDecisions(decisions, coin, balanceArray, openOrders
       continue;
     }
 
-    if (d.confidence < 55) {
+    if (d.confidence < holdThreshold) {
       execResults.push({ ...d, rendimiento, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
       skippedCount++;
       continue;
