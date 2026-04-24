@@ -15,11 +15,13 @@ import {
   getPreviousDecisions,
   getExecutedOrders,
   getDecisionById,
-  getOpenPositionSummary
+  getOpenPositionSummary,
+  getRecentOpenBuyFromOtherSymbols
 } from '../services/mongo/mongo-service.js';
 import { callAgentAnalyzer } from './services/clientAgent.js';
 import { buildAnalyzerMessage } from './context/analyzer-market.js';
 import { config } from '../config/config.js';
+import { getCrossSymbolLookbackMinutes } from '../utils/cron-formatter.js';
 
 // Import workflow modules
 import { fetchMarketData } from './workflow/market-fetch.js';
@@ -32,6 +34,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
   const startTime = Date.now();
   const chatId = userConfig?.chatId || 'single_user';
   const effectiveConfig = userConfig || config;
+  const lookbackMinutes = getCrossSymbolLookbackMinutes(effectiveConfig.cron.schedule);
+  logger.info('User config MINUTS:', lookbackMinutes);
 
   logger.info(`🤖 Agent cycle started (trigger: ${triggerReason}, coin: ${coin}, user: ${chatId})`);
 
@@ -186,6 +190,37 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       realAvailableBalances
     );
 
+    // Fetch cross symbol open buy context
+    let crossSymbolRecentOpenBuy = null;
+    if (dbConnected) {
+      try {
+        const otherOpenBuy = await getRecentOpenBuyFromOtherSymbols(coin, lookbackMinutes, chatId);
+        if (otherOpenBuy) {
+          const ageMinutes = Math.max(
+            0,
+            Math.round((Date.now() - new Date(otherOpenBuy.openedAt).getTime()) / 60000)
+          );
+
+          let roiPct = null;
+          const symbolIndicators = indicators[otherOpenBuy.symbol];
+          const currentOtherPrice = symbolIndicators?.currentPrice || 0;
+
+          if (currentOtherPrice > 0 && otherOpenBuy.entryPrice > 0) {
+            roiPct = Number((((currentOtherPrice - otherOpenBuy.entryPrice) / otherOpenBuy.entryPrice) * 100).toFixed(2));
+          }
+
+          crossSymbolRecentOpenBuy = {
+            symbol: otherOpenBuy.symbol,
+            ageMinutes,
+            costUsd: Number((otherOpenBuy.costUsd || 0).toFixed(2)),
+            roiPct,
+          };
+        }
+      } catch (err) {
+        logger.warn(`⚠️ Failed to build cross-symbol recent open buy context: ${err.message}`);
+      }
+    }
+
     // Merge previous decisions and open position context
     analyzerContext.previousDecisions = previousDecisionsBySymbol;
     analyzerContext.openLots = openPositionSummary?.openLots || [];
@@ -193,6 +228,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     analyzerContext.lastExecutedOrder = lastOrder;
     analyzerContext.rendimiento = rendimiento;
     analyzerContext.rendimientoAcumulado = analyzerContext.tradingStats?.accumulatedRendimiento ?? null;
+    analyzerContext.crossSymbolRecentOpenBuy = crossSymbolRecentOpenBuy;
+    analyzerContext.NextAnalysis = lookbackMinutes;
     // lastPrice = price at the time of the most recent previous decision for this coin
     const lastPrice = previousDecisionsBySymbol[snapshot.symbol]?.[0]?.price || lastOrder?.price || 0;
     const currentPrice = indicators[snapshot.symbol]?.currentPrice || 0;

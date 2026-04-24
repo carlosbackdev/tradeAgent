@@ -581,3 +581,32 @@ export async function getDecisionById(id) {
     return null;
   }
 }
+
+export async function getRecentOpenBuyFromOtherSymbols(currentSymbol, lookbackMinutes, chatId = null) {
+  const db = await connectDB();
+  const ordersCollection = db.collection('orders');
+
+  const since = new Date(Date.now() - (lookbackMinutes * 60 * 1000));
+  const normalizedCurrent = String(currentSymbol || '').replace('/', '-').toUpperCase();
+
+  const query = {
+    side: 'buy',
+    status: 'executed',
+    lot_status: { $in: ['open', 'partially_closed'] },
+    created_at: { $gte: since },
+    symbol: { $ne: normalizedCurrent },
+  };
+
+  if (chatId) query.chat_id = String(chatId);
+
+  const doc = await ordersCollection.find(query).sort({ created_at: -1 }).limit(1).next();
+  if (!doc) return null;
+
+  return {
+    symbol: doc.symbol,
+    openedAt: doc.created_at,
+    qty: Number(doc.remaining_qty ?? doc.qty ?? 0),
+    costUsd: Number(doc.remaining_cost_usd ?? doc.usd_amount ?? 0),
+    entryPrice: Number(doc.price ?? 0),
+  };
+}

@@ -74,6 +74,7 @@ export async function callClaudeWithCustomPrompt(userMessage, apiKey = null, mod
 }
 
 export async function callAgentAnalyzer(userMessage, apiKey = null, model = null, tradingConfig = null) {
+  logger.info(`🧠 Calling Claude Analyzer with message: ${userMessage}`);
   return callClaudeWithCustomPrompt(userMessage, apiKey, model, tradingConfig);
 }
 
