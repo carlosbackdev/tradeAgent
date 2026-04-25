@@ -34,7 +34,7 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
       lastPrice: context.lastPrice ?? null,
       priceChangeSinceLastAnalysisPct: context.priceChangeSinceLastAnalysisPct ?? 0,
       managedPositions: context.tradingStats?.openPositions || [],
-      crossSymbolRecentOpenBuy: context.crossSymbolRecentOpenBuy || null,
+      recentOtherSymbolsOpenBuy: context.crossSymbolRecentOpenBuy || null,
       nextAnalysis: 'Next analysis in ' + context.NextAnalysis + ' minutes',
     },
     decisionContext: {
