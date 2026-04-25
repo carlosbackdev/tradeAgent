@@ -4,7 +4,7 @@
 
 import { config } from '../../config/config.js';
 
-export function buildAnalyzerMessage(context, question = '', tradingConfig = null) {
+export function buildAnalyzerMessage(context, question = '', tradingConfig = null, coin = null) {
   const activeTradingConfig = tradingConfig || config.trading;
   const usableBalances = JSON.parse(JSON.stringify(context.balances || {}));
 
@@ -18,6 +18,7 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
 
   const analysisData = {
     timestamp: new Date().toISOString(),
+    symbol: coin,
     exchangeTruth: {
       balances: usableBalances,
       openOrders,

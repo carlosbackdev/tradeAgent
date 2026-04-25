@@ -162,5 +162,6 @@ export const callClaudeWithCustomPrompt = callAiWithCustomPrompt;
 
 export async function callAgentAnalyzer(userMessage, apiKey = null, model = null, tradingConfig = null, llmConfig = null) {
   logger.info(`🧠 callAgentAnalyzer → provider: ${llmConfig?.provider || config.llm.provider}`);
+  logger.info('User Message: ', userMessage);
   return callAiWithCustomPrompt(userMessage, apiKey, model, tradingConfig, null, llmConfig);
 }

@@ -355,9 +355,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       ...analyzerContext,
       openOrders: openOrdersThisCoin,
     };
-    const AiPayload = buildAnalyzerMessage(analyzerContextForAi, question, effectiveConfig.trading);
+    const AiPayload = buildAnalyzerMessage(analyzerContextForAi, question, effectiveConfig.trading, coin);
 
-    logger.info(`${effectiveConfig.llm.provider} Payload:`, JSON.stringify(AiPayload, null, 2));
     logger.info('Forced decision:', JSON.stringify(forcedDecision, null, 2));
 
     // ── 5. Get AI decision or use forced decision ──────────────
