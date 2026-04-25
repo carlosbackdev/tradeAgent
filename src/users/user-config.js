@@ -52,9 +52,11 @@ export function buildUserConfig(user) {
       baseUrl: cfg.REVOLUT_BASE_URL || (isAdmin ? getEnv('REVOLUT_BASE_URL') : 'https://revx.revolut.com'),
       privateKeyPath: privateKeyPath || cfg.REVOLUT_PRIVATE_KEY_PATH || (isAdmin ? getEnv('REVOLUT_PRIVATE_KEY_PATH') : ''),
     },
-    anthropic: {
-      apiKey: cfg.ANTHROPIC_API_KEY || (isAdmin ? getEnv('ANTHROPIC_API_KEY') : ''),
-      model: cfg.ANTHROPIC_MODEL || (isAdmin ? getEnv('ANTHROPIC_MODEL') : 'claude-haiku-4-5'),
+    // LLM config (generic)
+    llm: {
+      apiKey: cfg.AI_PROVIDER_API_KEY || (isAdmin ? getEnv('AI_PROVIDER_API_KEY') : ''),
+      model: cfg.AI_MODEL || (isAdmin ? getEnv('AI_MODEL') : 'claude-haiku-4-5'),
+      provider: cfg.AI_PROVIDER || (isAdmin ? getEnv('AI_PROVIDER') : 'anthropic'),
     },
     telegram: {
       botToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -98,7 +100,8 @@ export function buildUserConfig(user) {
       if (cfg[key] !== undefined && cfg[key] !== null && cfg[key] !== '') return String(cfg[key]);
       const defaults = {
         'REVOLUT_BASE_URL': process.env.REVOLUT_BASE_URL || 'https://trading.revolut.com/api/1.0',
-        'ANTHROPIC_MODEL': process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+        'AI_MODEL': process.env.AI_MODEL || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+        'AI_PROVIDER': process.env.AI_PROVIDER || 'anthropic',
         'VISION_AGENT': process.env.VISION_AGENT || 'short',
         'PERSONALITY_AGENT': process.env.PERSONALITY_AGENT || 'moderate',
         'TRADING_PAIRS': process.env.TRADING_PAIRS || 'BTC-USD',
@@ -120,11 +123,11 @@ export function buildUserConfig(user) {
     },
     // Keys a regular user can edit (no shared Telegram credentials)
     get editableKeys() {
-      return ['REVOLUT_API_KEY', 'REVOLUT_BASE_URL', 'REVOLUT_PRIVATE_KEY_PATH', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL'];
+      return ['REVOLUT_API_KEY', 'REVOLUT_PRIVATE_KEY_PATH', 'AI_PROVIDER_API_KEY', 'AI_MODEL', 'AI_PROVIDER'];
     },
     // Additional keys only visible to admin
     get editableKeysAdmin() {
-      return ['REVOLUT_API_KEY', 'REVOLUT_BASE_URL', 'REVOLUT_PRIVATE_KEY_PATH', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
+      return ['REVOLUT_API_KEY', 'REVOLUT_BASE_URL', 'REVOLUT_PRIVATE_KEY_PATH', 'AI_PROVIDER_API_KEY', 'AI_MODEL', 'AI_PROVIDER', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
     },
     get editableKeysAgent() {
       return ['VISION_AGENT', 'PERSONALITY_AGENT', 'TRADING_PAIRS', 'MAX_TRADE_SIZE', 'MIN_ORDER', 'TAKE_PROFIT_PCT', 'STOP_LOSS_PCT', 'INDICATORS_CANDLES_INTERVAL'];
@@ -140,7 +143,10 @@ export function validateUserConfig(userConfig) {
   const missing = [];
   if (!userConfig.revolut.apiKey) missing.push('REVOLUT_API_KEY');
   if (!userConfig.revolut.privateKeyPath) missing.push('REVOLUT_PRIVATE_KEY_PEM');
-  if (!userConfig.anthropic.apiKey) missing.push('ANTHROPIC_API_KEY');
+  // Validate LLM credentials
+  if (!userConfig.llm.apiKey) missing.push('AI_PROVIDER_API_KEY');
+  // Optional: ensure model present
+  if (!userConfig.llm.model) missing.push('AI_MODEL');
   if (!userConfig.trading.pairs.length) missing.push('TRADING_PAIRS');
   return { ok: missing.length === 0, missing };
 }

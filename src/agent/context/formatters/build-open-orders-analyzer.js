@@ -1,6 +1,6 @@
 /**
  * open-orders-analyzer-prompt.js
- * Constructs prompts and context for Claude to analyze open orders
+ * Constructs prompts and context for Model AI to analyze open orders
  * Uses 3-layer structure (exchangeTruth, botState, decisionContext) like main analyzer
  */
 
@@ -9,7 +9,7 @@
  * @param {Object} openOrder - The open order
  * @param {Object} analyzerContext - Full trading context
  * @param {string} symbol - Trading symbol
- * @returns {Object} Enriched context for Claude with 3-layer structure
+ * @returns {Object} Enriched context for Model AI with 3-layer structure
  */
 export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol, tradingConfig = null) {
   const normalizedSymbol = normalizeSymbol(symbol);

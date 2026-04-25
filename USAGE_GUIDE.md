@@ -166,7 +166,7 @@ STOP_LOSS_PCT=1           # SL ajustado
 TRADING_PAIRS=BTC-USD,ETH-USD
 ```
 
-> **Nota sobre coste:** Cada ciclo hace una llamada a Claude (claude-haiku-4-5). A 30 min de intervalo son ~48 llamadas/día. El coste estimado con Haiku es de ~€2-4/mes. Si bajas a 5 min el coste sube proporcionalmente (~€15-20/mes).
+> **Nota sobre coste:** Cada ciclo hace una llamada al modelo de IA elegido (ejemplo claude-haiku-4-5). A 30 min de intervalo son ~48 llamadas/día. El coste estimado con Haiku es de ~€2-4/mes. Si bajas a 5 min el coste sube proporcionalmente (~€15-20/mes).
 
 ---
 

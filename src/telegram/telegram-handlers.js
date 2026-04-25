@@ -7,15 +7,8 @@ import { RevolutClient } from '../revolut/client.js';
 import { MarketData } from '../revolut/market.js';
 import { config } from '../config/config.js';
 import { CRON_PRESETS } from './entities/cronPresets.js';
-
-const COINS = [
-    { symbol: 'BTC', name: 'Bitcoin', emoji: '₿' },
-    { symbol: 'ETH', name: 'Ethereum', emoji: '◇' },
-    { symbol: 'SOL', name: 'Solana', emoji: '◎' },
-    { symbol: 'VVV', name: 'Venice Token', emoji: '🦋' },
-    { symbol: 'XRP', name: 'Ripple', emoji: '✕' },
-];
-
+import { PROVIDER_MODELS } from '../agent/entities/models.js';
+import { COINS } from '../agent/entities/coins.js';
 
 // ── Cron presets ──────────────────────────────────────────────────
 // Imported from entities/cronPresets.js
@@ -296,7 +289,7 @@ export class TelegramHandlers {
         const coin = COINS.find(c => c.symbol === symbol);
         if (!coin) { await this.ctx.sendMessage('❌ Moneda no encontrada. Usa /help', { parse_mode: 'HTML' }); return; }
 
-        await this.ctx.sendMessage(`⏳ Analizando ${coin.emoji} ${symbol}...\n\nFetching datos → indicadores → Claude AI → ejecución`, { parse_mode: 'HTML' });
+        await this.ctx.sendMessage(`⏳ Analizando ${coin.emoji} ${symbol}...\n\nFetching datos → indicadores → Model AI → ejecución`, { parse_mode: 'HTML' });
 
         try {
             await runAgentCycle('telegram', `${symbol}-USD`, '', this.ctx.readEnvFile());
@@ -404,6 +397,46 @@ export class TelegramHandlers {
                         }
                     });
                     return;
+                }
+
+                if (key === 'AI_PROVIDER') {
+                    await this.ctx.sendMessage('🤖 <b>PROVEEDOR DE IA</b>\n\nSelecciona el proveedor que deseas usar:', {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: 'Anthropic', callback_data: 'SET_AGENT_CFG:AI_PROVIDER:anthropic' },
+                                    { text: 'OpenAI', callback_data: 'SET_AGENT_CFG:AI_PROVIDER:openai' },
+                                ],
+                                [
+                                    { text: 'Gemini', callback_data: 'SET_AGENT_CFG:AI_PROVIDER:gemini' },
+                                    { text: 'DeepSeek', callback_data: 'SET_AGENT_CFG:AI_PROVIDER:deepseek' }
+                                ],
+                                [{ text: '🔙 CANCELAR', callback_data: '/configuration' }]
+                            ]
+                        }
+                    });
+                    return;
+                }
+
+                if (key === 'AI_MODEL') {
+                    const userCfg = this.ctx.readEnvFile();
+                    const provider = userCfg.getRaw('AI_PROVIDER') || 'anthropic';
+                    const models = PROVIDER_MODELS[provider] || [];
+
+                    if (models.length > 0) {
+                        const keyboard = {
+                            inline_keyboard: [
+                                ...chunk(models.map(m => ({ text: m, callback_data: `SET_AGENT_CFG:AI_MODEL:${m}` })), 1),
+                                [{ text: '🔙 CANCELAR', callback_data: '/configuration' }]
+                            ]
+                        };
+                        await this.ctx.sendMessage(`🧠 <b>MODELO DE IA (${provider.toUpperCase()})</b>\n\nSelecciona el modelo que deseas usar:`, {
+                            parse_mode: 'HTML',
+                            reply_markup: keyboard
+                        });
+                        return;
+                    }
                 }
 
                 await this.ctx.sendMessage(`✏️ Escribe el nuevo valor para <code>${this.configState.selectedKey}</code>:`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
@@ -624,25 +657,30 @@ export class TelegramHandlers {
 
         if (data.startsWith('SET_AGENT_CFG:')) {
             const [, key, value] = data.split(':');
-            const ok = this.ctx.updateEnvFile(key, value);
+            let ok = this.ctx.updateEnvFile(key, value);
+
+            // Auto-reset model if provider changes
+            if (ok && key === 'AI_PROVIDER') {
+                const defaultModel = PROVIDER_MODELS[value]?.[0] || '';
+                if (defaultModel) {
+                    this.ctx.updateEnvFile('AI_MODEL', defaultModel);
+                }
+            }
 
             this.configState.isConfiguring = false;
             this.configState.selectedKey = null;
             this.configState.mode = null;
 
+            const backButton = key.includes('AI_')
+                ? { text: '⚙️ API CONFIG', callback_data: '/configuration' }
+                : { text: '🤖 VOLVER A AGENTE', callback_data: '/agent' };
+
             await this.ctx.editMessage(messageId,
                 ok
                     ? `✅ <b>${key}</b> actualizado a <code>${value}</code>`
                     : `❌ Error actualizando ${key}`,
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🤖 VOLVER A AGENTE', callback_data: '/agent' }]] } }
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[backButton]] } }
             );
-
-            if (ok) {
-                await this.ctx.sendMessage(
-                    `✅ <b>Configuración guardada</b>\n\n<code>${key}</code> → <code>${value}</code>`,
-                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🤖 AGENTE CONFIG', callback_data: '/agent' }, { text: '🏠 MENÚ', callback_data: '/init' }]] } }
-                );
-            }
             return;
         }
     }

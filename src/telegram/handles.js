@@ -27,19 +27,25 @@ export async function notifyError(message, chatId = null) {
 /**
  * Send an order execution confirmation.
  */
-export async function notifyOrderExecuted({ symbol, side, qty, usdAmount, price }, chatId = null) {
+export async function notifyOrderExecuted({ symbol, side, qty, orderType, usdAmount, price }, chatId = null) {
   const emoji = side === 'buy' || side === 'BUY' ? '🟢' : '🔴';
   const action = side === 'buy' || side === 'BUY' ? 'COMPRA' : 'VENTA';
+  let orderComplete;
+  if (orderType === 'market') {
+    orderComplete = 'Orden completada exitosamente';
+  } else {
+    orderComplete = 'Orden abierta completada';
+  }
 
-  const message = `${emoji} *Orden Ejecutada*
+  const message = `${emoji} <b>Orden Ejecutada</b>
   
 💱 ${symbol}
-📊 Acción: *${action}*
+📊 Acción: <b>${action}</b>
+⚖️ Orden: <b>${type}</b>
 💰 Monto: $${usdAmount}
 📈 Cantidad: ${qty}
 💵 Precio: $${price}
 
-✅ Orden completada exitosamente`;
-
+✅ ${orderComplete}`;
   await send(message, chatId);
 }

@@ -7,27 +7,32 @@ import { updateUserConfig, setOnboardingStep, setUserStatus } from './user-regis
 import { logger } from '../utils/logger.js';
 import { escapeHTML } from '../utils/formatter.js';
 
-export const TOTAL_STEPS = 4;
+export const TOTAL_STEPS = 5;
 
 const STEPS = {
   1: {
     key: 'REVOLUT_API_KEY',
-    prompt: '🔑 <b>Paso 1/4 — Revolut X API Key</b>\n\nEntra a Revolut X → Perfil → API Keys → Crear clave API.\n\nEnvíame la <b>API Key</b> ahora:',
+    prompt: '🔑 <b>Paso 1/5 — Revolut X API Key</b>\n\nEntra a Revolut X → Perfil → API Keys → Crear clave API.\n\nEnvíame la <b>API Key</b> ahora:',
     validate: (v) => v.length > 20,
   },
   2: {
     key: 'REVOLUT_PRIVATE_KEY_PEM',
-    prompt: '🔐 <b>Paso 2/4 — Clave privada Ed25519</b>\n\nNecesito tu clave privada (archivo .pem) para firmar las peticiones.\n\nPega el contenido completo del archivo <code>private.pem</code>, incluyendo las líneas:\n<code>-----BEGIN PRIVATE KEY-----</code>\n<code>...</code>\n<code>-----END PRIVATE KEY-----</code>',
+    prompt: '🔐 <b>Paso 2/5 — Clave privada Ed25519</b>\n\nNecesito tu clave privada (archivo .pem) para firmar las peticiones.\n\nPega el contenido completo del archivo <code>private.pem</code>, incluyendo las líneas:\n<code>-----BEGIN PRIVATE KEY-----</code>\n<code>...</code>\n<code>-----END PRIVATE KEY-----</code>',
     validate: (v) => v.includes('BEGIN PRIVATE KEY') && v.includes('END PRIVATE KEY'),
   },
   3: {
-    key: 'ANTHROPIC_API_KEY',
-    prompt: '🤖 <b>Paso 3/4 — Anthropic API Key</b>\n\nVe a <a href="https://console.anthropic.com">console.anthropic.com</a> → API Keys → Crear.\n\nEnvíame tu <b>API Key</b> (sk-ant-...):',
-    validate: (v) => v.startsWith('sk-ant-') || v.startsWith('sk-'),
+    key: 'AI_PROVIDER',
+    prompt: '🤖 <b>Paso 3/5 — Proveedor de IA</b>\n\nSelecciona el proveedor de IA que deseas usar escribiendo su nombre:\n\n• <code>anthropic</code> (Recomendado)\n• <code>openai</code>\n• <code>gemini</code>\n• <code>deepseek</code>',
+    validate: (v) => ['anthropic', 'openai', 'gemini', 'deepseek'].includes(v.toLowerCase().trim()),
   },
   4: {
+    key: 'AI_PROVIDER_API_KEY',
+    prompt: '🔑 <b>Paso 4/5 — API Key de IA</b>\n\nEnvíame la <b>API Key</b> de tu proveedor elegido.\n\n<i>Nota: Para Gemini/Google suele empezar por AIza... Para el resto por sk-...</i>',
+    validate: (v) => v.length > 10,
+  },
+  5: {
     key: 'TRADING_PAIRS',
-    prompt: '💱 <b>Paso 4/4 — Pares de trading</b>\n\nSelecciona qué criptomonedas quieres que analice el agente.\n\nResponde con los símbolos separados por coma:\nEjemplo: <code>BTC-USD,ETH-USD</code> \n\nOpciones: BTC, ETH, SOL, XRP',
+    prompt: '💱 <b>Paso 5/5 — Pares de trading</b>\n\nSelecciona qué criptomonedas quieres que analice el agente.\n\nResponde con los símbolos separados por coma:\nEjemplo: <code>BTC-USD,ETH-USD</code> \n\nOpciones: BTC, ETH, SOL, XRP',
     validate: (v) => v.length >= 3,
   }
 };
@@ -55,7 +60,7 @@ export async function processOnboardingStep(user, text) {
   if (currentStepNum === 1) {
     configUpdate['REVOLUT_BASE_URL'] = 'https://revx.revolut.com';
   }
-  if (currentStepNum === 4) {
+  if (currentStepNum === 5) {
     configUpdate['DRY_RUN'] = 'false'; // Mode REAL by default
     configUpdate['CRON_ENABLED'] = 'true';
     configUpdate['CRON_SCHEDULE'] = '*/15 * * * *';

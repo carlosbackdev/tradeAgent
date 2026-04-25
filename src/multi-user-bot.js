@@ -383,7 +383,7 @@ async function routeUpdate(update) {
       // Show the "config incomplete" prompt with onboarding button
       await sendMessage(chatId,
         '<b>⚠️ Configuración incompleta</b>\n\n' +
-        'Faltan credenciales necesarias para operar (API Key de Revolut, clave privada o Anthropic).\n\n' +
+        'Faltan credenciales necesarias para operar (API Key de Revolut, clave privada o IA).\n\n' +
         'Pulsa el botón de abajo para configurar tu cuenta paso a paso.',
         {
           parse_mode: 'HTML',

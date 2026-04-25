@@ -14,7 +14,7 @@ import {
 
 /**
  * Given an array of candle closes (oldest → newest), compute a full
- * indicator suite and return a flat object Claude can reason about.
+ * indicator suite and return a flat object Model AI can reason about.
  */
 export function computeIndicators(closes) {
   if (closes.length < 26) {
@@ -133,7 +133,7 @@ function deriveSignals({ currentPrice, rsi, macd, prevMacd, bb, ema12, ema26 }) 
 
 /**
  * Compute an objective confluence signal from the raw indicators.
- * Returns bullish/bearish counts and a concrete suggestion for Claude.
+ * Returns bullish/bearish counts and a concrete suggestion for Model AI.
  */
 function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
   const bullish = [];

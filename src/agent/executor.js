@@ -158,7 +158,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     const fifoRendimiento = Number(openPositionSummary?.unrealizedRoiPct);
     rendimiento = Number.isFinite(fifoRendimiento) ? fifoRendimiento : calculatedRendimiento;
 
-    // ── 4. Build context for Claude (EARLY - needed for open order analysis) ──
+    // ── 4. Build context for Model AI (EARLY - needed for open order analysis) ──
     const previousDecisionsBySymbol = {};
     if (dbConnected) {
       for (const snap of snapshots) {
@@ -341,7 +341,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     if (!hasFundsToBuy && !hasCoinBalance) {
       const msg = `💤 *${coin}*: Sin fondos suficientes ($${availableMoney.toFixed(2)} < $${minOrderUsd}) y sin balance de ${baseCurrency}. Ciclo pausado.`;
-      logger.info(`⏭️  Skipping Claude for ${coin}: no funds and no ${baseCurrency} balance`);
+      logger.info(`⏭️  Skipping Model AI for ${coin}: no funds and no ${baseCurrency} balance`);
       await notify(msg, chatId).catch(() => { });
       return {
         decision: null,
@@ -350,28 +350,29 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       };
     }
 
-    // Build the Claude context only with open orders for this coin.
-    const analyzerContextForClaude = {
+    // Build the Model AI context only with open orders for this coin.
+    const analyzerContextForAi = {
       ...analyzerContext,
       openOrders: openOrdersThisCoin,
     };
-    const claudePayload = buildAnalyzerMessage(analyzerContextForClaude, question, effectiveConfig.trading);
+    const AiPayload = buildAnalyzerMessage(analyzerContextForAi, question, effectiveConfig.trading);
 
+    logger.info(`${effectiveConfig.llm.provider} Payload:`, JSON.stringify(AiPayload, null, 2));
     logger.info('Forced decision:', JSON.stringify(forcedDecision, null, 2));
 
-    // ── 5. Get Claude decision or use forced decision ──────────────
+    // ── 5. Get AI decision or use forced decision ──────────────
     let decision;
     if (forcedDecision) {
       decision = { decisions: [forcedDecision] };
-      logger.info(`⚡ Bypassing Claude. Forced decision: ${forcedDecision.reasoning}`);
+      logger.info(`⚡ Bypassing AI. Forced decision: ${forcedDecision.reasoning}`);
     } else {
       try {
-        const anthConfig = effectiveConfig.anthropic;
-        decision = await callAgentAnalyzer(claudePayload, anthConfig.apiKey, anthConfig.model, effectiveConfig.trading);
-        logger.info('✅ Claude decision received');
+        const llmCfg = effectiveConfig.llm;
+        decision = await callAgentAnalyzer(AiPayload, llmCfg.apiKey, llmCfg.model, effectiveConfig.trading, llmCfg);
+        logger.info(`✅ ${llmCfg.provider} decision received`);
         logger.debug('Decision:', JSON.stringify(decision, null, 2));
       } catch (err) {
-        throw new Error(`Claude analysis failed: ${err.message}`);
+        throw new Error(`LLM analysis failed: ${err.message}`);
       }
     }
 

@@ -61,7 +61,8 @@ MFAwEAYHKoZIzj0CAQYFK4EEAAoDQgAE...
 
 ## Paso 2 — API Key de Anthropic
 
-El cerebro del agente es Claude, la IA de Anthropic. Necesitas tu propia clave para que el agente pueda hacer análisis de mercado en tu nombre.
+El cerebro del agente es el modelo elegido de IA. Necesitas tu propia clave para que el agente pueda hacer análisis de mercado en tu nombre.
+Ejemplo con claude:
 
 1. Ve a [console.anthropic.com](https://console.anthropic.com)
 2. Crea una cuenta si no tienes (tienen capa gratuita con crédito inicial)
@@ -69,7 +70,9 @@ El cerebro del agente es Claude, la IA de Anthropic. Necesitas tu propia clave p
 4. Dale un nombre descriptivo, por ejemplo: `trading-agent`
 5. Copia la clave — empieza por `sk-ant-...`
 
-> 💡 **Coste aproximado:** El agente usa `claude-haiku-4-5`, el modelo más económico. Con ciclos cada hora el gasto es de unos **€1-3 al mes**. Con ciclos cada 15 minutos, unos **€5-8 al mes**. Necesitarás añadir crédito en Anthropic para cubrir este coste.
+> 💡 **Coste aproximado:** Si el agente usa `claude-haiku-4-5`. Con ciclos cada hora el gasto es de unos **€1-3 al mes**. Con ciclos cada 15 minutos, unos **€5-8 al mes**. Necesitarás añadir crédito en Anthropic para cubrir este coste.
+
+El coste varía según el modelo de IA que uses.
 
 ---
 

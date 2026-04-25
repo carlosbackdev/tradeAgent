@@ -1,6 +1,6 @@
 # tradeAgent 🤖
 
-> Autonomous crypto trading agent powered by Claude AI, operating on Revolut X.  
+> Autonomous crypto trading agent powered by Agentic AI, operating on Revolut X.  
 > Multi-user architecture via Telegram — each user runs their own isolated trading instance with private credentials, strategy and trade history.
 
 ---
@@ -43,9 +43,9 @@ The system is designed around **multi-tenancy**: a single deployed bot instance 
 │   1  Fetch market data ──────────────────────────► Revolut X API     │
 │   2  Compute indicators (RSI, MACD, BB, EMA)                         │
 │   3  Check forced SL / TP from open FIFO lots                        │
-│   4  Build full Claude context                                       │
+│   4  Build full Model AI context                                       │
 │  4b  Handle open limit orders (keep / cancel / buy_more)             │
-│   5  Call Claude AI ─────────────────────────────► Anthropic API     │
+│   5  Call Model AI ─────────────────────────────► Anthropic API     │
 │   6  Save decisions to MongoDB                                       │
 │   7  Execute orders ─────────────────────────────► Revolut X API     │
 │   8  Notify via Telegram                                             │
@@ -83,16 +83,16 @@ Candles (OHLCV) from Revolut X
          │
          ▼
   Forced exit check
-  ├── rendimiento ≥ TAKE_PROFIT_PCT  → force SELL (bypass Claude)
-  └── rendimiento ≤ -STOP_LOSS_PCT  → force SELL (bypass Claude)
+  ├── rendimiento ≥ TAKE_PROFIT_PCT  → force SELL (bypass AI model)
+  └── rendimiento ≤ -STOP_LOSS_PCT  → force SELL (bypass AI model)
          │
          ▼
-  Assemble Claude context JSON
+  Assemble AI Model context JSON
   (indicators + confluence + balances + open lots + previous decisions
    + open orders + trading stats + candle changes + ATR + volume)
          │
          ▼
-  Claude AI decides
+  Agent AI decides
   → action (BUY / SELL / HOLD)
   → positionPct (fraction of balance, scaled by confidence)
   → orderType (market / limit)
@@ -119,7 +119,7 @@ Candles (OHLCV) from Revolut X
 
 Measures how fast and how much price has moved recently, normalized to 0–100. Values below 30 suggest the asset is oversold (potentially due for a bounce), above 70 suggest overbought (potentially due for a pullback).
 
-The agent uses RSI in two ways: as a raw value Claude can reason about, and as a derived signal (`RSI_OVERSOLD`, `RSI_OVERBOUGHT`, `RSI_BEARISH_ZONE`, `RSI_BULLISH_ZONE`) that feeds the confluence score.
+The agent uses RSI in two ways: as a raw value can reason about, and as a derived signal (`RSI_OVERSOLD`, `RSI_OVERBOUGHT`, `RSI_BEARISH_ZONE`, `RSI_BULLISH_ZONE`) that feeds the confluence score.
 
 ### MACD — Moving Average Convergence Divergence (12, 26, 9)
 
@@ -131,7 +131,7 @@ The agent sends three values: `macdLine`, `macdSignal`, `macdHistogram`. It also
 
 Three lines: a 20-period SMA in the middle, and upper/lower bands at ±2σ. When price touches or breaks the lower band, it is statistically far from the mean (potential reversal zone). When bands narrow, volatility is contracting; when they expand, a breakout is likely.
 
-The agent sends `bbUpper`, `bbMiddle`, `bbLower`, `bbWidth` (band width as % of middle), and `bbPosition` — a 0–100% value expressing where price sits within the bands. This last value is particularly useful for Claude as it is intuitive and scale-independent.
+The agent sends `bbUpper`, `bbMiddle`, `bbLower`, `bbWidth` (band width as % of middle), and `bbPosition` — a 0–100% value expressing where price sits within the bands. This last value is particularly useful for Agent as it is intuitive and scale-independent.
 
 ### EMA(12) / EMA(26) — Exponential Moving Averages
 
@@ -139,11 +139,11 @@ EMAs weight recent prices more heavily than older ones. The relationship between
 
 ### SMA(20)
 
-A simple 20-period moving average included as a reference for mean price. Sent to Claude but not used in the automated confluence scoring.
+A simple 20-period moving average included as a reference for mean price. Sent to AI but not used in the automated confluence scoring.
 
 ### Confluence score — the pre-computed summary
 
-Rather than having Claude infer a sentiment entirely on its own from raw numbers, the system pre-computes a `confluence` object with explicit bullish/bearish signal lists and a `suggestion` field (`BUY_SIGNAL`, `SELL_SIGNAL`, `NEUTRAL`).
+Rather than having Agent AI infer a sentiment entirely on its own from raw numbers, the system pre-computes a `confluence` object with explicit bullish/bearish signal lists and a `suggestion` field (`BUY_SIGNAL`, `SELL_SIGNAL`, `NEUTRAL`).
 
 ```js
 // Signals that contribute to bullishCount:
@@ -167,13 +167,13 @@ Rather than having Claude infer a sentiment entirely on its own from raw numbers
 //            = NEUTRAL otherwise
 ```
 
-The system prompt instructs Claude to use the confluence suggestion as a _foundation_ but apply its own judgment to the final action and confidence — avoiding over-reliance on a single pre-computed label while still providing deterministic signal structure.
+The system prompt instructs Agent AI to use the confluence suggestion as a _foundation_ but apply its own judgment to the final action and confidence — avoiding over-reliance on a single pre-computed label while still providing deterministic signal structure.
 
 ---
 
-## What Claude receives — Full context breakdown
+## What Agent AI receives — Full context breakdown
 
-Every cycle Claude receives a single JSON message containing:
+Every cycle Agent AI receives a single JSON message containing:
 
 ```jsonc
 {
@@ -273,27 +273,27 @@ Every cycle Claude receives a single JSON message containing:
 The indicator set covers the three classic dimensions: **momentum** (RSI, MACD), **trend** (EMA cross), and **volatility/mean reversion** (Bollinger Bands). For an LLM-based agent this is a well-balanced combination because:
 
 - Each indicator measures something qualitatively different, so they are relatively uncorrelated
-- The confluence pre-computation gives Claude a structured signal to anchor reasoning, reducing the chance of hallucinated patterns
+- The confluence pre-computation gives Agent AI a structured signal to anchor reasoning, reducing the chance of hallucinated patterns
 - `bbPosition` (0–100% within the bands) is particularly well-suited for a language model — it is scale-independent, intuitive, and immediately actionable
 - Sending `macdHistogram` from both the current and previous candle (via `MACD_MOMENTUM_INCREASING/DECREASING`) adds directional momentum context that the raw MACD line alone doesn't provide
-- ATR is included as a volatility measure, which helps Claude decide whether to widen TP/SL in high-volatility conditions
-- The `changesPercent` array (candle-by-candle % changes for the last 30 candles) gives Claude a readable sequence of recent price action without sending raw OHLCV arrays, which would be expensive in tokens
+- ATR is included as a volatility measure, which helps Agent AI decide whether to widen TP/SL in high-volatility conditions
+- The `changesPercent` array (candle-by-candle % changes for the last 30 candles) gives Agent AI a readable sequence of recent price action without sending raw OHLCV arrays, which would be expensive in tokens
 
 ### What could be improved
 
-**No volume-weighted indicators.** Volume is sent (`recentVolumes`, `avgVolume5`) but not processed into anything like VWAP or On-Balance Volume. A strong MACD signal with declining volume is a warning sign that the system currently leaves for Claude to infer implicitly.
+**No volume-weighted indicators.** Volume is sent (`recentVolumes`, `avgVolume5`) but not processed into anything like VWAP or On-Balance Volume. A strong MACD signal with declining volume is a warning sign that the system currently leaves for Agent AI to infer implicitly.
 
 **RSI thresholds are fixed.** The confluence logic triggers at RSI < 35 for oversold and > 65 for overbought. In strongly trending markets, RSI can stay in overbought territory for extended periods without a reversal. A dynamic threshold (e.g., based on the RSI's own recent range) would reduce false signals.
 
-**No higher timeframe context.** The agent analyzes a single timeframe defined by `INDICATORS_CANDLES_INTERVAL`. A practical improvement would be to send a second set of indicators for a higher timeframe (e.g., if the user uses 15-min candles, also send 4-hour indicators) so Claude can align short-term entries with the macro trend.
+**No higher timeframe context.** The agent analyzes a single timeframe defined by `INDICATORS_CANDLES_INTERVAL`. A practical improvement would be to send a second set of indicators for a higher timeframe (e.g., if the user uses 15-min candles, also send 4-hour indicators) so Agent AI can align short-term entries with the macro trend.
 
 **SMA(20) is redundant alongside BB middle.** Since Bollinger Bands use SMA(20) as the middle band, both `sma20` and `bbMiddle` carry identical information. One of them can be removed to reduce token consumption.
 
 **Confluence scoring is binary per signal.** Each signal contributes exactly 1 to the count regardless of magnitude. RSI at 25 (deep oversold) and RSI at 34 (barely oversold) both add 1 bullish point. Weighted scoring — where extreme RSI values contribute more — would give the confluence a more accurate picture of signal strength.
 
-### How the context is passed to Claude
+### How the context is passed to Agent AI
 
-The design choice to **pre-process** market data before sending it to Claude is correct and important. Sending raw OHLCV arrays would consume tokens with redundant information and make the prompt brittle. The current approach sends:
+The design choice to **pre-process** market data before sending it to Agent AI is correct and important. Sending raw OHLCV arrays would consume tokens with redundant information and make the prompt brittle. The current approach sends:
 
 - Processed scalar indicators (not time series)
 - Pre-derived signal labels (not just raw numbers)
@@ -301,7 +301,7 @@ The design choice to **pre-process** market data before sending it to Claude is 
 - Scale-independent derived metrics (`bbPosition`, `bbWidth`, `changesPercent`)
 - Human-readable duration strings (`"30.0 horas"`, `"8.3 días"`)
 
-This reduces the cognitive burden on Claude and keeps the prompt compact. The system prompt then instructs Claude to use the `suggestion` as a _foundation_ while applying its own judgment — a good balance between deterministic guardrails and LLM flexibility. Requiring strict JSON output and doing a robust fallback parse (`parseClaudeJsonResponse`) is the right approach for production reliability.
+This reduces the cognitive burden on Agent AI and keeps the prompt compact. The system prompt then instructs Agent AI to use the `suggestion` as a _foundation_ while applying its own judgment — a good balance between deterministic guardrails and LLM flexibility. Requiring strict JSON output and doing a robust fallback parse (`parseAgentAIJsonResponse`) is the right approach for production reliability.
 
 ---
 
@@ -350,7 +350,7 @@ Both `client_order_id` (UUID v4) and symbol format (`BTC-USD`, not `BTC/USD`) ar
 
 Open positions are tracked in an `open_lots` collection rather than inferred from order history at query time. When a BUY executes, a lot record is inserted with `lot_status: 'open'`. When a SELL executes, `applySellToOpenLots()` consumes lots in chronological order (oldest first), computing realized P&L per lot and updating `remaining_qty`.
 
-This gives Claude accurate position context on every cycle:
+This gives Agent AI accurate position context on every cycle:
 
 ```js
 openLots: [
@@ -361,7 +361,7 @@ openLots: [
 // → rendimiento   = (currentPrice - avgEntryPrice) / avgEntryPrice × 100
 ```
 
-This weighted average approach means Claude sees a realistic cost basis even after multiple partial buys at different prices — not just the last order price.
+This weighted average approach means Agent AI sees a realistic cost basis even after multiple partial buys at different prices — not just the last order price.
 
 ---
 
@@ -384,14 +384,14 @@ tradeAgent/
 │   │   ├── services/clientAgent.js     # Anthropic SDK wrapper + JSON parser
 │   │   ├── context/
 │   │   │   ├── indicators.js           # RSI, MACD, BB, EMA computation
-│   │   │   ├── analyzer-market.js      # Builds Claude user message
-│   │   │   ├── open-order-analyzer.js  # Claude analysis for pending orders
+│   │   │   ├── analyzer-market.js      # Builds Agent AI user message
+│   │   │   ├── open-order-analyzer.js  # Agent AI analysis for pending orders
 │   │   │   └── prompts/
 │   │   │       ├── trading-system-prompt.js
 │   │   │       └── open-orders-system-prompt.js
 │   │   └── workflow/
 │   │       ├── market-fetch.js         # Balances, orders, candles
-│   │       ├── context-builder.js      # Assembles full Claude context
+│   │       ├── context-builder.js      # Assembles full Agent AI context
 │   │       ├── decision-engine.js      # Forced SL/TP check
 │   │       ├── order-executor.js       # Validates + places orders
 │   │       ├── open-orders-manager.js  # Manages pending limit orders

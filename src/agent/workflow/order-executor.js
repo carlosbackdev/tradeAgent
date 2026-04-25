@@ -52,7 +52,7 @@ export async function executeDecisions(
 
     let usd = null;
 
-    const rawPositionPct = normalizeClaudePositionPct(d.positionPct ?? 0);
+    const rawPositionPct = normalizeForAiPositionPct(d.positionPct ?? 0);
 
     const effectivePositionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
       ? clamp(rawPositionPct, 0, maxTradeSizePct)
@@ -240,6 +240,7 @@ export async function executeDecisions(
           symbol: d.symbol,
           side: d.action.toLowerCase(),
           qty: orderResult.qty || 'pte.',
+          orderType: orderResult.type,
           usdAmount: usd.toFixed(2),
           price: currentPrice.toFixed(2),
         }, chatId);
@@ -304,7 +305,7 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function normalizeClaudePositionPct(rawValue) {
+function normalizeForAiPositionPct(rawValue) {
   const n = Number(rawValue);
   if (!Number.isFinite(n) || n <= 0) return 0;
 

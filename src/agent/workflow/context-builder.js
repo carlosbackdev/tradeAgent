@@ -1,6 +1,6 @@
 /**
  * workflow/context-builder.js
- * Builds the analyzer context for Claude with relevant data
+ * Builds the analyzer context for model AI with relevant data
  */
 
 import { getTradingPerformance } from '../../services/mongo/mongo-service.js';
@@ -151,7 +151,7 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
     };
   });
 
-  const tradingStatsForClaude = tradingStats ? {
+  const tradingStatsForAI = tradingStats ? {
     winRate: tradingStats.winRate,
     winningTrades: tradingStats.winningTrades,
     losingTrades: tradingStats.losingTrades,
@@ -176,13 +176,13 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
   };
 
   const botState = {
-    openLots: tradingStatsForClaude?.openPositions || [],
+    openLots: tradingStatsForAI?.openPositions || [],
     recentSells: [],
     lastExecutedOrder: null,
     rendimiento: null,
-    rendimientoAcumulado: tradingStatsForClaude?.accumulatedRendimiento ?? null,
-    tradingStats: tradingStatsForClaude,
-    managedPositions: tradingStatsForClaude?.openPositions || [],
+    rendimientoAcumulado: tradingStatsForAI?.accumulatedRendimiento ?? null,
+    tradingStats: tradingStatsForAI,
+    managedPositions: tradingStatsForAI?.openPositions || [],
   };
 
   const decisionContext = {
@@ -223,7 +223,7 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
     previousDecisions: {}, // Placeholder, filled in executor if needed
     lastExecutedOrder: null, // Placeholder, filled in executor if needed
     rendimiento: null, // Placeholder, filled in executor if needed
-    tradingStats: tradingStatsForClaude
+    tradingStats: tradingStatsForAI
   };
 
   return analyzerContext;

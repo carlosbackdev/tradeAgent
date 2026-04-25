@@ -95,12 +95,12 @@ export class UserSession {
   updateConfig(key, value) {
     const normalizedValue = typeof value === 'string' ? value.trim() : value;
 
-    if (key === 'ANTHROPIC_API_KEY') {
+    if (key === 'AI_PROVIDER_API_KEY' || key === 'ANTHROPIC_API_KEY') {
       const apiKey = String(normalizedValue || '');
-      if (!apiKey || apiKey.length < 10 || !apiKey.startsWith('sk-')) {
-        this._send(`❌ <b>ANTHROPIC_API_KEY inválida</b>
+      if (!apiKey || apiKey.length < 10) {
+        this._send(`❌ <b>API Key inválida</b>
 
-La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode: 'HTML' }).catch(() => { });
+La clave debe tener al menos 10 caracteres.`, { parse_mode: 'HTML' }).catch(() => { });
         return false;
       }
     }
@@ -131,10 +131,12 @@ La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode
       this.userConfig.trading.personalityAgent = value;
     } else if (key === 'INDICATORS_CANDLES_INTERVAL') {
       this.userConfig.indicators.candlesInterval = parseNum(value, 15);
-    } else if (key === 'ANTHROPIC_MODEL') {
-      this.userConfig.anthropic.model = normalizedValue;
-    } else if (key === 'ANTHROPIC_API_KEY') {
-      this.userConfig.anthropic.apiKey = normalizedValue;
+    } else if (key === 'AI_MODEL') {
+      this.userConfig.llm.model = normalizedValue;
+    } else if (key === 'AI_PROVIDER_API_KEY') {
+      this.userConfig.llm.apiKey = normalizedValue;
+    } else if (key === 'AI_PROVIDER') {
+      this.userConfig.llm.provider = normalizedValue;
     } else if (key === 'REVOLUT_API_KEY') {
       this.userConfig.revolut.apiKey = normalizedValue;
     } else if (key === 'REVOLUT_BASE_URL') {
@@ -167,18 +169,18 @@ La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode
       `💵 Min orden: $${this.userConfig.trading.minOrderUsd}\n` +
       `🎯 TP: ${this.userConfig.trading.takeProfitPct}%\n` +
       `🎯 SL: ${this.userConfig.trading.stopLossPct}%\n` +
-      `🧠 Modelo: ${this.userConfig.anthropic.model}\n` +
+      `🧠 Modelo: ${this.userConfig.llm.model} (${this.userConfig.llm.provider})\n` +
       `🌐 URL Revolut: ${this.userConfig.revolut.baseUrl}\n` +
       `${dry}\n` +
       `\n🔑 API Key: \`${(cfg.REVOLUT_API_KEY || '').substring(0, 12)}...\`\n` +
-      `🤖 Anthropic: \`${(cfg.ANTHROPIC_API_KEY || '').substring(0, 10)}...\``
+      `🤖 IA: \`${(cfg.AI_PROVIDER_API_KEY || '').substring(0, 10)}...\``
     );
   }
 
   async promptResetConfig() {
     await this._send(
       '⚠️ *¿Resetear configuración?*\n\n' +
-      'Esto borrará tu API Key de Revolut, la clave privada y la de Anthropic.\n' +
+      'Esto borrará tu API Key de Revolut, la clave privada y la de IA.\n' +
       'Tendrás que volver a configurarlo todo desde /start.',
       {
         reply_markup: {
@@ -195,7 +197,7 @@ La clave debe empezar por <code>sk-</code> y no puede ser vacía.`, { parse_mode
     await updateUserConfig(this.userId, {
       REVOLUT_API_KEY: '',
       REVOLUT_PRIVATE_KEY_PEM: '',
-      ANTHROPIC_API_KEY: '',
+      AI_PROVIDER_API_KEY: '',
     });
     this.stopCron();
     await this._send('✅ Configuración de API reseteada. Vuelve a configurar con /start.');

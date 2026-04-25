@@ -13,7 +13,7 @@ This document explains how the trading agent correctly sends orders to Revolut X
                              ↓
                     ┌────────────────┐
                     │  analyzer.js   │
-                    │  (Claude AI)   │
+                    │  (Agent AI)   │
                     └────────────────┘
                      Decision: BUY ETH
                      Price: $3500
@@ -359,7 +359,7 @@ Status: pending
 | `src/revolut/client.js` | Authenticated HTTP client for Revolut X |
 | `src/revolut/orders.js` | OrderManager - builds & sends orders    |
 | `src/agent/executor.js` | Orchestrates cycle, calls placeOrder    |
-| `src/agent/analyzer.js` | Claude AI decision engine               |
+| `src/agent/analyzer.js` | Agent AI decision engine               |
 | `src/utils/mongodb.js`  | Persists orders with TP/SL              |
 | `test-order-flow.js`    | Verifies complete order sending chain   |
 

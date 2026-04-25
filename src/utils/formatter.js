@@ -3,7 +3,7 @@
  * Format decision results and execution info for Telegram notifications with premium aesthetics.
  */
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 export function formatDecision({ decision, execResults, elapsed, triggerReason }) {
   let msg = `╔════════════════════════╗\n`;
@@ -250,7 +250,7 @@ export function formatAgentStatusMessage({ uConfig, cronSt, mode }) {
 
   msg += `🤖 <b>TECNOLOGÍA</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `🧠 <b>Modelo IA:</b> <code>${uConfig.anthropic.model}</code>\n`;
+  msg += `🧠 <b>Modelo IA:</b> <code>${uConfig.llm.model}</code>\n`;
   msg += `⏰ <b>Cron:</b> ${cronSt.enabled ? '✅ ACTIVO' : '⏸️ INACTIVO'} (${parseCron})\n`;
   msg += `🏦 <b>Modo:</b> ${mode}`;
 

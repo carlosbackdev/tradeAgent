@@ -1,12 +1,11 @@
-/**
- * open-orders-manager.js
- * Manages detection, analysis, and resolution of open orders for a trading symbol
- * Reuses callClaudeWithCustomPrompt for consistent JSON parsing and Claude communication
- */
+/* open-orders-manager.js
+* Manages detection, analysis, and resolution of open orders for a trading symbol
+* Reuses generic AI client for consistent JSON parsing and communication
+*/
 
 import { logger } from '../../utils/logger.js';
 import { saveOrder, saveDecision, markOrderCancelled } from '../../services/mongo/mongo-service.js';
-import { analyzeOpenOrderWithClaude } from '../context/open-order-analyzer.js';
+import { analyzeOpenOrderWithAi } from '../context/open-order-analyzer.js';
 import { OrderManager } from '../../revolut/orders.js';
 
 /**
@@ -40,10 +39,10 @@ export async function processOpenOrders(
   effectiveConfig = null
 ) {
   try {
-    const anthConfig = effectiveConfig?.anthropic;
+    const llmCfg = effectiveConfig?.llm;
     const tradingConfig = effectiveConfig?.trading;
 
-    if (!anthConfig || !tradingConfig) {
+    if (!llmCfg || !tradingConfig) {
       throw new Error('Missing effectiveConfig for open order analysis');
     }
 
@@ -67,14 +66,15 @@ export async function processOpenOrders(
     // Analyze each order using full context
     for (const order of openOrdersThisCoin) {
       try {
-        // Step 1: Get Claude decision
-        const analysis = await analyzeOpenOrderWithClaude(
+        // Step 1: Get AI decision
+        const analysis = await analyzeOpenOrderWithAi(
           order,
           analyzerContext,
           symbol,
-          anthConfig.apiKey,
-          anthConfig.model,
-          tradingConfig
+          llmCfg.apiKey,
+          llmCfg.model,
+          tradingConfig,
+          llmCfg
         );
         const orderId = order.id || order.order_id;
 
@@ -178,7 +178,7 @@ export async function processOpenOrders(
           }
         } else if (analysis.action === 'buy_more') {
           // Place additional BUY order
-          logger.info(`📈 Placing BUY_MORE for ${symbol} (Claude confidence: ${analysis.confidence}%)`);
+          logger.info(`📈 Placing BUY_MORE for ${symbol} (Model AI confidence: ${analysis.confidence}%)`);
 
           try {
             const currentPrice = analyzerContext.indicators?.[symbol.replace('/', '-')]?.currentPrice || 0;

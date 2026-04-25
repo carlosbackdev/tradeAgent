@@ -25,10 +25,11 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "node-cron": "^3.0.3",
-    "technicalindicators": "^3.1.0",
     "dotenv": "^16.4.5",
-    "mongodb": "^6.3.0"
+    "mongodb": "^6.3.0",
+    "node-cron": "^3.0.3",
+    "openai": "^6.34.0",
+    "technicalindicators": "^3.1.0"
   },
   "devDependencies": {
     "eslint": "^8.56.0"
