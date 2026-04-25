@@ -30,5 +30,9 @@ export const PROVIDER_MODELS = {
         'deepseek-r1',          // razonamiento barato
         'deepseek-v4-pro',      // más calidad
         'deepseek-v3.2-speciale'// experimental/premium
+    ],
+    groq: [
+        'llama-3.3-70b-versatile', // Potente y rápido
+        'llama-3.1-8b-instant'     // Ultra-rápido para análisis simples
     ]
 };

@@ -412,6 +412,9 @@ export class TelegramHandlers {
                                     { text: 'Gemini', callback_data: 'SET_AGENT_CFG:AI_PROVIDER:gemini' },
                                     { text: 'DeepSeek', callback_data: 'SET_AGENT_CFG:AI_PROVIDER:deepseek' }
                                 ],
+                                [
+                                    { text: 'Groq', callback_data: 'SET_AGENT_CFG:AI_PROVIDER:groq' }
+                                ],
                                 [{ text: '🔙 CANCELAR', callback_data: '/configuration' }]
                             ]
                         }

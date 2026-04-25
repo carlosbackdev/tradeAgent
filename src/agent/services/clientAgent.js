@@ -18,24 +18,39 @@ import { config } from '../../config/config.js';
  * @returns {Object}
  */
 export function parseLlmJsonResponse(raw) {
+  if (!raw) throw new Error('LLM returned an empty response');
+  
+  const cleanedRaw = raw.trim();
   try {
-    return JSON.parse(raw);
+    return JSON.parse(cleanedRaw);
   } catch (_) {
-    logger.debug('Direct JSON parse failed, attempting cleanup…');
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`Failed to extract JSON from LLM response: ${raw.substring(0, 500)}…`);
+    logger.debug('Direct JSON parse failed, attempting deep cleanup and repair…');
+    
+    let firstBrace = cleanedRaw.indexOf('{');
+    let lastBrace = cleanedRaw.lastIndexOf('}');
+    
+    // Si no hay cierre pero hay apertura, intentamos reparar el truncamiento
+    if (firstBrace !== -1 && lastBrace <= firstBrace) {
+      logger.warn('JSON appears truncated, attempting auto-repair...');
+      let repaired = cleanedRaw + '\n      ]\n    }\n  ]\n}'; // Intento de cierre agresivo para nuestra estructura
+      try { return JSON.parse(repaired.substring(firstBrace)); } catch(e) {}
+      
+      // Segundo intento de reparación más simple
+      repaired = cleanedRaw + ' }'; 
+      try { return JSON.parse(repaired.substring(firstBrace)); } catch(e) {}
     }
-    const cleaned = jsonMatch[0]
-      .replace(/^```json\s*/i, '')
-      .replace(/```$/, '')
-      .trim();
-    try {
-      return JSON.parse(cleaned);
-    } catch (parseErr) {
-      logger.error('JSON Parse Error. Snippet:', raw.substring(0, 500));
-      throw new Error(`LLM JSON parse failed: ${parseErr.message}`);
+
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const candidate = cleanedRaw.substring(firstBrace, lastBrace + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch (e) {
+        // Si falla, intentamos limpiar markdown
+        const noMarkdown = candidate.replace(/```json\s?|```/gi, '').trim();
+        try { return JSON.parse(noMarkdown); } catch (e2) {}
+      }
     }
+    throw new Error(`No valid JSON object found in response: ${cleanedRaw.substring(0, 100)}...`);
   }
 }
 
@@ -49,6 +64,7 @@ async function callAnthropic({ apiKey, model, systemPrompt, userMessage }) {
   const response = await anthropic.messages.create({
     model,
     max_tokens: 2048,
+    temperature: 0.1,
     system: systemPrompt,
     messages: [{ role: 'user', content: [{ type: 'text', text: userMessage }] }],
   });
@@ -65,6 +81,8 @@ async function callOpenAICompat({ apiKey, model, systemPrompt, userMessage, base
   const response = await client.chat.completions.create({
     model,
     max_tokens: 2048,
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
@@ -74,10 +92,21 @@ async function callOpenAICompat({ apiKey, model, systemPrompt, userMessage, base
 }
 
 async function callGemini({ apiKey, model, systemPrompt, userMessage }) {
-  const endpoint = (`https://generativelanguage.googleapis.com/v1beta/models/${model}`) + `:generateContent?key=${apiKey}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const body = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+    generationConfig: {
+      temperature: 0.1,
+      response_mime_type: 'application/json',
+      maxOutputTokens: 4096,
+    },
+    safetySettings: [
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+    ]
   };
   const res = await fetch(endpoint, {
     method: 'POST',
@@ -144,6 +173,9 @@ export async function callAiWithCustomPrompt(
     case 'openai':
     case 'deepseek':
       raw = await callOpenAICompat(params);
+      break;
+    case 'groq':
+      raw = await callOpenAICompat({ ...params, baseUrl: 'https://api.groq.com/openai/v1' });
       break;
     case 'gemini':
       raw = await callGemini(params);

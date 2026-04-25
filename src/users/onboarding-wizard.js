@@ -22,8 +22,8 @@ const STEPS = {
   },
   3: {
     key: 'AI_PROVIDER',
-    prompt: '🤖 <b>Paso 3/5 — Proveedor de IA</b>\n\nSelecciona el proveedor de IA que deseas usar escribiendo su nombre:\n\n• <code>anthropic</code> (Recomendado)\n• <code>openai</code>\n• <code>gemini</code>\n• <code>deepseek</code>',
-    validate: (v) => ['anthropic', 'openai', 'gemini', 'deepseek'].includes(v.toLowerCase().trim()),
+    prompt: '🤖 <b>Paso 3/5 — Proveedor de IA</b>\n\nSelecciona el proveedor de IA que deseas usar escribiendo su nombre:\n\n• <code>anthropic</code> (Recomendado)\n• <code>openai</code>\n• <code>gemini</code>\n• <code>deepseek</code>\n• <code>groq</code>',
+    validate: (v) => ['anthropic', 'openai', 'gemini', 'deepseek', 'groq'].includes(v.toLowerCase().trim()),
   },
   4: {
     key: 'AI_PROVIDER_API_KEY',
