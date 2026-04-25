@@ -25,7 +25,7 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
 
           const tpPct = config.trading.takeProfitPct || 0;
           const slPct = config.trading.stopLossPct || 0;
-          const usdWorth = baseBalance * currentPrice * 0.995; // 99.5% safety margin
+          const usdWorth = baseBalance * currentPrice * 0.999; // 99.5% safety margin
 
           if (tpPct > 0 && rendimiento >= tpPct) {
             forcedDecision = {
