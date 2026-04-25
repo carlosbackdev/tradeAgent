@@ -41,7 +41,7 @@ export async function notifyOrderExecuted({ symbol, side, qty, orderType, usdAmo
   
 💱 ${symbol}
 📊 Acción: <b>${action}</b>
-⚖️ Orden: <b>${type}</b>
+⚖️ Orden: <b>${orderType}</b>
 💰 Monto: $${usdAmount}
 📈 Cantidad: ${qty}
 💵 Precio: $${price}
