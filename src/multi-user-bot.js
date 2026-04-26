@@ -214,7 +214,9 @@ async function handleOnboarding(user, text, messageId) {
   }
 
   // Show next step
-  await sendMessage(chatId, result.nextPrompt);
+  await sendMessage(chatId, result.nextPrompt, { 
+    reply_markup: result.nextReplyMarkup 
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -342,7 +344,13 @@ async function routeUpdate(update) {
 
       const firstStep = getStep(0);
       const bar = buildProgressBar(0, TOTAL_STEPS);
-      await sendMessage(chatId, `${bar}\n\n${firstStep.prompt}`);
+      const markup = firstStep.keyboard ? { 
+        keyboard: firstStep.keyboard, 
+        one_time_keyboard: true, 
+        resize_keyboard: true 
+      } : {};
+
+      await sendMessage(chatId, `${bar}\n\n${firstStep.prompt}`, { reply_markup: markup });
       return;
     }
 

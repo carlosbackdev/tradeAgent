@@ -22,8 +22,12 @@ const STEPS = {
   },
   3: {
     key: 'AI_PROVIDER',
-    prompt: '🤖 <b>Paso 3/5 — Proveedor de IA</b>\n\nSelecciona el proveedor de IA que deseas usar escribiendo su nombre:\n\n• <code>anthropic</code> (Recomendado)\n• <code>openai</code>\n• <code>gemini</code>\n• <code>deepseek</code>\n• <code>groq</code>',
+    prompt: '🤖 <b>Paso 3/5 — Proveedor de IA</b>\n\nSelecciona el proveedor de IA que deseas usar:',
     validate: (v) => ['anthropic', 'openai', 'gemini', 'deepseek', 'groq'].includes(v.toLowerCase().trim()),
+    keyboard: [
+      ['anthropic', 'openai'],
+      ['gemini', 'deepseek', 'groq']
+    ]
   },
   4: {
     key: 'AI_PROVIDER_API_KEY',
@@ -60,6 +64,13 @@ export async function processOnboardingStep(user, text) {
   if (currentStepNum === 1) {
     configUpdate['REVOLUT_BASE_URL'] = 'https://revx.revolut.com';
   }
+  if (currentStepNum === 4) {
+    // Also save as provider-specific key to enable fallback chain immediately
+    const provider = (user.config?.AI_PROVIDER || text).trim().toUpperCase();
+    if (provider) {
+      configUpdate[`AI_PROVIDER_API_KEY_${provider}`] = text.trim();
+    }
+  }
   if (currentStepNum === 5) {
     configUpdate['DRY_RUN'] = 'false'; // Mode REAL by default
     configUpdate['CRON_ENABLED'] = 'true';
@@ -85,11 +96,22 @@ export async function processOnboardingStep(user, text) {
       await setOnboardingStep(user.telegram_id, nextStepNum);
       user.onboarding_step = nextStepNum;
       const nextStep = STEPS[nextStepNum];
+      
+      let nextReplyMarkup = null;
+      if (nextStep.keyboard) {
+        nextReplyMarkup = {
+          keyboard: nextStep.keyboard,
+          one_time_keyboard: true,
+          resize_keyboard: true
+        };
+      }
+
       return {
         done: false,
         stepNumber: nextStepNum,
         totalSteps: TOTAL_STEPS,
-        nextPrompt: nextStep.prompt
+        nextPrompt: nextStep.prompt,
+        nextReplyMarkup
       };
     }
   } catch (err) {

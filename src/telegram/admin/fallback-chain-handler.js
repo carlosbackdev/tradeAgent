@@ -105,7 +105,6 @@ export class FallbackChainHandler {
   // ── Slot: pick provider ───────────────────────────────────────────
 
   async handleSetProvider(slot, messageId) {
-    if (!this.ctx.isAdmin) return;
     const providers = Object.keys(PROVIDER_MODELS);
     const rows = chunk(
       providers.map(p => ({
@@ -126,7 +125,6 @@ export class FallbackChainHandler {
   // ── Slot: pick model for provider ─────────────────────────────────
 
   async handlePickProvider(slot, provider, messageId) {
-    if (!this.ctx.isAdmin) return;
     const models = PROVIDER_MODELS[provider] || [];
     if (models.length === 0) {
       await this.ctx.editMessage(messageId, `❌ No hay modelos definidos para <b>${provider}</b>.`, { parse_mode: 'HTML' });
@@ -152,8 +150,6 @@ export class FallbackChainHandler {
   // ── Slot: confirm + save ──────────────────────────────────────────
 
   async handleConfirm(slot, provider, model, messageId) {
-    if (!this.ctx.isAdmin) return;
-
     // Persist slot config
     this.ctx.updateEnvFile(`FALLBACK_CHAIN_${slot}`, provider);
     this.ctx.updateEnvFile(`FALLBACK_CHAIN_${slot}_MODEL`, model);
