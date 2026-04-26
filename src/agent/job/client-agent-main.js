@@ -75,7 +75,9 @@ export class clientAgentMain {
         throw new Error(`Unsupported LLM provider: "${provider}"`);
     }
 
-    return parseLlmJsonResponse(raw);
+    const decision = parseLlmJsonResponse(raw);
+    decision.usedModel = effectiveModel;
+    return decision;
   }
 
   /** @deprecated Use callAiWithCustomPrompt */

@@ -397,6 +397,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
             takeProfit: d.takeProfit || null,
             stopLoss: d.stopLoss || null,
             rendimiento: rendimiento !== null ? rendimiento : null,
+            model: decision.usedModel || null,
           }, triggerReason, chatId);
 
           d.mongoDecisionId = saved?._id;

@@ -11,7 +11,11 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
   let msg = `╔════════════════════════╗\n`;
   msg += `      📊 <b>TRADING REPORT</b>\n`;
   msg += `╚════════════════════════╝\n`;
-  msg += `⏱️ <b>Duración:</b> ${elapsed}s | 🎯 <b>Trigger:</b> ${triggerReason.toUpperCase()}\n\n`;
+  msg += `⏱️ <b>Duración:</b> ${elapsed}s | 🎯 <b>Trigger:</b> ${triggerReason.toUpperCase()}\n`;
+  if (decision.usedModel) {
+    msg += `🧠 <b>Modelo:</b> <code>${escapeHTML(decision.usedModel)}</code>\n`;
+  }
+  msg += `\n`;
 
   msg += `🌍 <b>RESUMEN DEL MERCADO</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;

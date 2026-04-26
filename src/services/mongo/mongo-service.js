@@ -49,6 +49,7 @@ export async function saveDecision(decision, trigger = 'cron', chatId = null) {
     takeProfit: decision.takeProfit || null,
     stopLoss: decision.stopLoss || null,
     rendimiento: decision.rendimiento !== undefined ? decision.rendimiento : null,
+    model: decision.model || null,
   };
 
   try {

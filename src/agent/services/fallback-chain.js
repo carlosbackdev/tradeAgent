@@ -49,7 +49,7 @@ export function getFallbackChain(userConfig) {
   const chain = [];
   for (let i = 1; i <= 3; i++) {
     const provider = userConfig.getRaw(`FALLBACK_CHAIN_${i}`) || '';
-    const model    = userConfig.getRaw(`FALLBACK_CHAIN_${i}_MODEL`) || '';
+    const model = userConfig.getRaw(`FALLBACK_CHAIN_${i}_MODEL`) || '';
     if (provider && model) chain.push({ provider, model });
   }
   return chain;

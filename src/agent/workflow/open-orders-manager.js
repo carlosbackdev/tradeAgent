@@ -95,6 +95,7 @@ export async function processOpenOrders(
               stopLoss: null,
               open_order_id: orderId,
               open_order_action: analysis.action,
+              model: analysis.usedModel || null,
             };
 
             const saved = await saveDecision(decisionPayload, triggerReason, chatId);
