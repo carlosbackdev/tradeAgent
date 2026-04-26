@@ -47,7 +47,7 @@ export async function callGemini({ apiKey, model, systemPrompt, userMessage }) {
     generationConfig: {
       temperature: 0.1,
       response_mime_type: 'application/json',
-      maxOutputTokens: 4096,
+      maxOutputTokens: 8192,
     },
     safetySettings: [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
