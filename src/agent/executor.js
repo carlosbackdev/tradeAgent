@@ -18,7 +18,8 @@ import {
   getOpenPositionSummary,
   getRecentOpenBuyFromOtherSymbols
 } from '../services/mongo/mongo-service.js';
-import { callAgentAnalyzer } from './services/clientAgent.js';
+import { clientAgentInstance } from './job/client-agent-main.js';
+import { callAgentWithFallback, isFallbackChainEnabled } from './services/fallback-chain.js';
 import { buildAnalyzerMessage } from './context/analyzer-market.js';
 import { config } from '../config/config.js';
 import { getCrossSymbolLookbackMinutes } from '../utils/cron-formatter.js';
@@ -35,7 +36,6 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
   const chatId = userConfig?.chatId || 'single_user';
   const effectiveConfig = userConfig || config;
   const lookbackMinutes = getCrossSymbolLookbackMinutes(effectiveConfig.cron.schedule);
-  logger.info('User config MINUTS:', lookbackMinutes);
 
   logger.info(`🤖 Agent cycle started (trigger: ${triggerReason}, coin: ${coin}, user: ${chatId})`);
 
@@ -274,11 +274,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       return orderSymbol !== normalizedCoinUpper;
     });
 
-    logger.info(`🔍 Open orders: ${openOrdersThisCoin.length} for ${coin}, ${openOrdersOtherCoins.length} for other coins`);
-
     // Case 1: Orders for THIS coin (ANY balance) → Procesa with FULL context y CONTINUA
     if (openOrdersThisCoin.length > 0) {
-      logger.info(`📋 Processing ${openOrdersThisCoin.length} open order(s) for ${coin} with full context...`);
       const processResult = await processOpenOrders(
         coin,
         openOrdersThisCoin,
@@ -316,11 +313,9 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
         await notify(`❌ *${coin}*: Open orders failed: ${processResult.error}`, chatId).catch(() => { });
         logger.warn(`⚠️ Open orders processing failed for ${coin}. Continuing with main flow.`);
       } else {
-        logger.info(`✅ Processed: ${processResult.cancelled} cancelled, ${processResult.buy_more_count || 0} buy_more, ${processResult.kept} kept`);
         try {
           const openOrdersMessage = formatOpenOrdersMessage({ symbol: coin, results: processResult });
           await notify(openOrdersMessage, chatId);
-          logger.info('📤 Open orders Telegram notification sent');
         } catch (err) {
           logger.warn(`⚠️ Failed to send open orders notification: ${err.message}`);
         }
@@ -341,7 +336,6 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     if (!hasFundsToBuy && !hasCoinBalance) {
       const msg = `💤 *${coin}*: Sin fondos suficientes ($${availableMoney.toFixed(2)} < $${minOrderUsd}) y sin balance de ${baseCurrency}. Ciclo pausado.`;
-      logger.info(`⏭️  Skipping Model AI for ${coin}: no funds and no ${baseCurrency} balance`);
       await notify(msg, chatId).catch(() => { });
       return {
         decision: null,
@@ -357,8 +351,6 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     };
     const AiPayload = buildAnalyzerMessage(analyzerContextForAi, question, effectiveConfig.trading, coin);
 
-    logger.info('Forced decision:', JSON.stringify(forcedDecision, null, 2));
-
     // ── 5. Get AI decision or use forced decision ──────────────
     let decision;
     if (forcedDecision) {
@@ -367,7 +359,14 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     } else {
       try {
         const llmCfg = effectiveConfig.llm;
-        decision = await callAgentAnalyzer(AiPayload, llmCfg.apiKey, llmCfg.model, effectiveConfig.trading, llmCfg);
+        // is active three call first call with free model if fail try with paid model
+        if (isFallbackChainEnabled(effectiveConfig)) {
+          logger.info('🔗 Usando fallback chain para LLM analysis');
+          decision = await callAgentWithFallback(AiPayload, effectiveConfig, effectiveConfig.trading);
+        } else {
+          decision = await clientAgentInstance.callAgentAnalyzer(AiPayload, llmCfg.apiKey, llmCfg.model, effectiveConfig.trading, llmCfg);
+        }
+
         logger.info(`✅ ${llmCfg.provider} decision received`);
         logger.debug('Decision:', JSON.stringify(decision, null, 2));
       } catch (err) {
@@ -428,7 +427,6 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     try {
       const message = formatDecision({ decision, execResults, elapsed, triggerReason });
       await notify(message, chatId);
-      logger.info('📤 Telegram notification sent');
     } catch (err) {
       logger.error('Failed to send Telegram notification:', err.message);
     }

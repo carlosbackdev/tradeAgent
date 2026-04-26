@@ -52,12 +52,22 @@ export function buildUserConfig(user) {
       baseUrl: cfg.REVOLUT_BASE_URL || (isAdmin ? getEnv('REVOLUT_BASE_URL') : 'https://revx.revolut.com'),
       privateKeyPath: privateKeyPath || cfg.REVOLUT_PRIVATE_KEY_PATH || (isAdmin ? getEnv('REVOLUT_PRIVATE_KEY_PATH') : ''),
     },
-    // LLM config (generic)
-    llm: {
-      apiKey: cfg.AI_PROVIDER_API_KEY || (isAdmin ? getEnv('AI_PROVIDER_API_KEY') : ''),
-      model: cfg.AI_MODEL || (isAdmin ? getEnv('AI_MODEL') : 'claude-haiku-4-5'),
-      provider: cfg.AI_PROVIDER || (isAdmin ? getEnv('AI_PROVIDER') : 'anthropic'),
-    },
+    // LLM config — API key is stored per-provider (AI_PROVIDER_API_KEY_<PROVIDER>)
+    llm: (() => {
+      const provider = cfg.AI_PROVIDER || (isAdmin ? getEnv('AI_PROVIDER') : 'anthropic');
+      const providerKey = `AI_PROVIDER_API_KEY_${provider.toUpperCase()}`;
+      // Prefer provider-specific key, fall back to legacy generic key for backwards compat
+      const apiKey =
+        cfg[providerKey] ||
+        (isAdmin ? getEnv(providerKey) : '') ||
+        cfg.AI_PROVIDER_API_KEY ||
+        (isAdmin ? getEnv('AI_PROVIDER_API_KEY') : '');
+      return {
+        apiKey,
+        model: cfg.AI_MODEL || (isAdmin ? getEnv('AI_MODEL') : 'claude-haiku-4-5'),
+        provider,
+      };
+    })(),
     telegram: {
       botToken: process.env.TELEGRAM_BOT_TOKEN,
       chatId: user.telegram_id,
@@ -96,6 +106,14 @@ export function buildUserConfig(user) {
 
     // Helpers compatible with existing Config class API
     getRaw(key) {
+      // For the generic AI_PROVIDER_API_KEY, resolve from current provider-specific key
+      if (key === 'AI_PROVIDER_API_KEY') {
+        const provider = cfg.AI_PROVIDER || process.env.AI_PROVIDER || 'anthropic';
+        const providerKey = `AI_PROVIDER_API_KEY_${provider.toUpperCase()}`;
+        const providerVal = cfg[providerKey] || process.env[providerKey] || '';
+        if (providerVal) return providerVal;
+        return cfg.AI_PROVIDER_API_KEY || process.env.AI_PROVIDER_API_KEY || '';
+      }
       // Return stored value first, then known defaults
       if (cfg[key] !== undefined && cfg[key] !== null && cfg[key] !== '') return String(cfg[key]);
       const defaults = {
@@ -115,9 +133,19 @@ export function buildUserConfig(user) {
     },
     update(key, value) {
       cfg[key] = value;
+      const patch = { [key]: value };
+
+      // When saving the generic API key, also persist it under the current provider's specific key
+      if (key === 'AI_PROVIDER_API_KEY') {
+        const provider = cfg.AI_PROVIDER || process.env.AI_PROVIDER || 'anthropic';
+        const providerKey = `AI_PROVIDER_API_KEY_${provider.toUpperCase()}`;
+        cfg[providerKey] = value;
+        patch[providerKey] = value;
+      }
+
       // Persist async (fire and forget)
       import('./user-registry.js').then(({ updateUserConfig }) => {
-        updateUserConfig(user.telegram_id, { [key]: value }).catch(() => { });
+        updateUserConfig(user.telegram_id, patch).catch(() => { });
       });
       return true;
     },

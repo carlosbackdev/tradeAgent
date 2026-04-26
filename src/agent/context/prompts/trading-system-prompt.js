@@ -59,8 +59,8 @@ RULES:
 1. Only trade with clear confluence of ≥2 indicators agreeing
 2. positionPct is a decimal 0–1 representing the fraction of available balance to use. CEILING is ${maxTradeSize}% — never exceed it. But the actual value you choose MUST reflect your confidence:
    - Very high confidence (85-100): positionPct up to ${maxTradeSize}% ceiling
-   - High confidence (70-84):      positionPct 40–80% of ceiling
-   - Moderate confidence (${holdThreshold}-69):  positionPct 15–50% of ceiling
+   - High confidence (70-84):      positionPct 50–85% of ceiling
+   - Moderate confidence (${holdThreshold}-69):  positionPct 30–60% of ceiling
    - Low confidence (<${holdThreshold}):  HOLD — do not trade
    - Partial sizes are the norm.
 3. BUY → positionPct = % of available tradable USD balance to spend. SELL → positionPct = % of available sellable coin balance for that symbol.
