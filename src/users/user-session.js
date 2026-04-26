@@ -48,7 +48,8 @@ export class UserSession {
       getCronStatus: () => self.getCronStatus(),
       get cronSchedule() { return userConfig.cron.schedule; },
       set cronSchedule(s) { userConfig.cron.schedule = s; },
-      username: this.username
+      username: this.username,
+      userConfig: this.userConfig
     };
 
     this.handlers = new TelegramHandlers(this.botContext);
@@ -186,14 +187,13 @@ export class UserSession {
     const activeKey = cfg[providerKey] || cfg.AI_PROVIDER_API_KEY || '';
 
     await this._send(
-      `⚙️ *Tu configuración*\n\n` +
-      `🎯 Pares: ${this.userConfig.trading.pairs.join(', ')}\n` +
-      `💰 Max trade: ${this.userConfig.trading.maxTradeSize}%\n` +
-      `💵 Min orden: $${this.userConfig.trading.minOrderUsd}\n` +
-      `🎯 TP: ${this.userConfig.trading.takeProfitPct}%\n` +
-      `🎯 SL: ${this.userConfig.trading.stopLossPct}%\n` +
-      `🧠 Modelo: ${this.userConfig.llm.model} (${provider})\n` +
-      `🌐 URL Revolut: ${this.userConfig.revolut.baseUrl}\n` +
+      `⚙️ <b>Tu configuración</b>\n\n` +
+      `🎯 <code>Pares: ${this.userConfig.trading.pairs.join(', ')}</code>\n` +
+      `💰 <code>Max trade: ${this.userConfig.trading.maxTradeSize}%</code>\n` +
+      `💵 <code>Min orden: $${this.userConfig.trading.minOrderUsd}</code>\n` +
+      `🎯 <code>TP: ${this.userConfig.trading.takeProfitPct}%</code>\n` +
+      `🎯 <code>SL: ${this.userConfig.trading.stopLossPct}%</code>\n` +
+      `🧠 <code>Modelo: ${this.userConfig.llm.model} (${provider})</code>\n` +
       `${dry}\n` +
       `\n🔑 API Key Revolut: \`${(cfg.REVOLUT_API_KEY || '').substring(0, 12)}...\`\n` +
       `🤖 IA (${provider}): \`${activeKey.substring(0, 10)}...\``

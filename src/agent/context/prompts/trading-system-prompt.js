@@ -57,7 +57,7 @@ If volatility is high, widen TP/SL and lower confidence unless confluence is str
 
 RULES:
 1. Only trade with clear confluence of ≥2 indicators agreeing
-2. positionPct is a decimal 0–1 representing the fraction of available balance to use. CEILING is ${maxTradeSize}% — never exceed it. But the actual value you choose MUST reflect your confidence:
+2. positionPct must be a number from 0 to 100. It represents the percentage of available balance to use. CEILING is ${maxTradeSize}% — never exceed it. But the actual value you choose MUST reflect your confidence:
    - Very high confidence (85-100): positionPct up to ${maxTradeSize}% ceiling
    - High confidence (70-84):      positionPct 50–85% of ceiling
    - Moderate confidence (${holdThreshold}-69):  positionPct 30–60% of ceiling

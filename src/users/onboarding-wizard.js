@@ -73,8 +73,8 @@ export async function processOnboardingStep(user, text) {
   }
   if (currentStepNum === 5) {
     configUpdate['DRY_RUN'] = 'false'; // Mode REAL by default
-    configUpdate['CRON_ENABLED'] = 'true';
-    configUpdate['CRON_SCHEDULE'] = '*/15 * * * *';
+    configUpdate['CRON_ENABLED'] = 'false';
+    configUpdate['CRON_SCHEDULE'] = '0 * * * *';
   }
 
   const nextStepNum = currentStepNum + 1;
@@ -96,7 +96,7 @@ export async function processOnboardingStep(user, text) {
       await setOnboardingStep(user.telegram_id, nextStepNum);
       user.onboarding_step = nextStepNum;
       const nextStep = STEPS[nextStepNum];
-      
+
       let nextReplyMarkup = null;
       if (nextStep.keyboard) {
         nextReplyMarkup = {

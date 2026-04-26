@@ -29,6 +29,7 @@ export class TelegramHandlers {
         this.admin = new AdminHandlers(botContext);
         this.fallbackChain = new FallbackChainHandler(botContext);
         this.callbackHandler = new CallbackHandler(this, this.configState, botContext);
+        this.userConfig = botContext.userConfig;
     }
 
     get isConfiguring() {
@@ -36,6 +37,7 @@ export class TelegramHandlers {
     }
 
     async handleInit() {
+        logger.info(`UserConfig: ${JSON.stringify(this.userConfig)}`);
         this.configState.isConfiguring = false;
         this.configState.selectedKey = null;
 
@@ -71,6 +73,7 @@ export class TelegramHandlers {
         const pairs = uConfig.trading.pairs || [];
 
         const statusMsg = formatInitMessage({
+            userConfig: this.userConfig,
             username: this.ctx.username,
             cronStatus: cronSt,
             mode,

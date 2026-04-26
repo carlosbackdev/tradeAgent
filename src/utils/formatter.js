@@ -3,6 +3,8 @@
  * Format decision results and execution info for Telegram notifications with premium aesthetics.
  */
 
+import { isFallbackChainEnabled, getFallbackChain } from '../agent/services/fallback-chain.js';
+
 const TOTAL_STEPS = 5;
 
 export function formatDecision({ decision, execResults, elapsed, triggerReason }) {
@@ -94,7 +96,7 @@ export function formatOpenOrdersMessage({ symbol, results }) {
   return msg;
 }
 
-export function formatInitMessage({ username, cronStatus, mode, pairs }) {
+export function formatInitMessage({ userConfig, username, cronStatus, mode, pairs }) {
   const display = username ? ' <b>@' + escapeHTML(username) + '</b>' : '';
   const cronDesc = cronStatus.enabled ? `✅ <code>${CronParse(cronStatus.schedule)}</code>` : '⏸️ <i>desactivado</i>';
   const pairsList = Array.isArray(pairs) && pairs.length > 0 ? pairs.join(', ') : '<i>no configurados</i>';
@@ -105,9 +107,19 @@ export function formatInitMessage({ username, cronStatus, mode, pairs }) {
 
   msg += `⚙️ <b>SISTEMA</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `⏰ <b>Operativa:</b> ${cronDesc}\n`;
+  msg += `⏰ <b>Cronómetro de Ciclos:</b> ${cronDesc}\n`;
   msg += `💰 <b>Modo:</b> ${mode}\n`;
   msg += `📈 <b>Seguimiento:</b> <code>${pairsList}</code>\n\n`;
+
+  if (isFallbackChainEnabled(userConfig)) {
+    const chain = getFallbackChain(userConfig);
+    const models = chain.map(c => c.model).join(' → ');
+    msg += `🔗 <b>Fallback Chain:</b> ✅ ACTIVO\n`;
+    msg += `🧠 <b>Cascada:</b> <code>${models}</code>\n\n`;
+  } else {
+    msg += `🤖 <b>Proveedor AI:</b> ${userConfig.llm.provider}\n`;
+    msg += `🧠 <b>Modelo AI:</b> ${userConfig.llm.model}\n\n`;
+  }
 
   msg += `✅ <i>Gestiona tu agente mediante el menú:</i>`;
   return msg;
@@ -239,8 +251,9 @@ export function formatAgentStatusMessage({ uConfig, cronSt, mode }) {
   msg += `🎯 <b>OPERATIVA</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
   msg += `📈 <b>Pares:</b> <code>${pairs.join(', ')}</code>\n`;
-  msg += `🧐 <b>Estrategia:</b> <code>${uConfig.trading.personalityAgent}</code> | 🔮 <b>Visión:</b> <code>${uConfig.trading.visionAgent}</code>\n`;
-  msg += `🕯️ <b>Velas:</b> <code>${uConfig.indicators.candlesInterval} min</code>\n\n`;
+  msg += `🧐 <b>Estrategia:</b> <code>${uConfig.trading.personalityAgent}</code>\n`;
+  msg += `🔮 <b>Visión:</b> <code>${uConfig.trading.visionAgent}</code>\n`;
+  msg += `🕯️ <b>Velas a:</b> <code>${uConfig.indicators.candlesInterval} min</code>\n\n`;
 
   msg += `💰 <b>GESTIÓN DE RIESGO</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
@@ -250,7 +263,16 @@ export function formatAgentStatusMessage({ uConfig, cronSt, mode }) {
 
   msg += `🤖 <b>TECNOLOGÍA</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `🧠 <b>Modelo IA:</b> <code>${uConfig.llm.model}</code>\n`;
+
+  if (isFallbackChainEnabled(uConfig)) {
+    const chain = getFallbackChain(uConfig);
+    const models = chain.map(c => c.model).join(' → ');
+    msg += `🔗 <b>Fallback Chain:</b> ✅ ACTIVO\n`;
+    msg += `🧠 <b>Cascada:</b> <code>${models}</code>\n\n`;
+  } else {
+    msg += `🧠 <b>Modelo IA:</b> <code>${uConfig.llm.model}</code>\n`;
+  }
+
   msg += `⏰ <b>Cron:</b> ${cronSt.enabled ? '✅ ACTIVO' : '⏸️ INACTIVO'} (${parseCron})\n`;
   msg += `🏦 <b>Modo:</b> ${mode}`;
 
