@@ -328,6 +328,22 @@ export class TelegramHandlers {
         await this.ctx.sendMessage(text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
     }
 
+    async handleConfigurationAgent() {
+        const userCfg = this.ctx.readEnvFile();
+        const keys = userCfg.editableKeysAgent;
+        const params = keys.map(key => {
+            const value = userCfg.getRaw(key) || '(—)';
+            return { key, value };
+        });
+
+        const text = formatConfigMessage(params);
+
+        this.configState.mode = 'agent';
+        this.configState.selectedKey = null;
+        this.configState.isConfiguring = true;
+        await this.ctx.sendMessage(text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
+    }
+
     async handleConfigInput(text) {
         if (this.configState.isInviting) {
             this.configState.isInviting = false;
