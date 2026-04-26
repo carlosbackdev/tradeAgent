@@ -24,10 +24,10 @@ function chunk(arr, size) {
 }
 
 const PROVIDER_LABELS = {
-  anthropic: '🟣 Anthropic',
-  openai: '🟢 OpenAI',
+  anthropic: '⭐ Anthropic',
+  openai: '🏐 OpenAI',
   gemini: '🔵 Gemini',
-  deepseek: '🟡 DeepSeek',
+  deepseek: '🐋 DeepSeek',
   groq: '⚡ Groq',
 };
 
