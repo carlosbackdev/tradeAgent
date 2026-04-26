@@ -53,6 +53,7 @@ export class TelegramHandlers {
                 [
                     { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
                     { text: '⚙️ API CONFIG', callback_data: '/configuration' },
+                    { text: '🔗 FALLBACK CHAIN', callback_data: '/fallback_chain' }
                 ],
                 [
                     { text: '💬 ASK AGENT', callback_data: '/ask' },
@@ -63,7 +64,6 @@ export class TelegramHandlers {
 
         if (this.ctx.isAdmin) {
             initKeyboard.inline_keyboard.push([{ text: '👑 ADMIN PANEL', callback_data: '/admin' }]);
-            initKeyboard.inline_keyboard.push([{ text: '🔗 FALLBACK CHAIN', callback_data: '/fallback_chain' }]);
         }
 
         const uConfig = this.ctx.readEnvFile();
@@ -96,6 +96,7 @@ export class TelegramHandlers {
                 [
                     { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
                     { text: '⚙️ API CONFIG', callback_data: '/configuration' },
+                    { text: '🔗 FALLBACK CHAIN', callback_data: '/fallback_chain' }
                 ],
                 [
                     { text: '💬 ASK AGENT', callback_data: '/ask' },
@@ -494,12 +495,14 @@ export class TelegramHandlers {
         }
     }
 
+    // ── Fallback Chain Handler
+    async handleFallbackChain() { return this.fallbackChain.handleFallbackChainMenu(); }
+
     // ── Admin Handlers
-    async handleInvite(username)      { return this.admin.handleInvite(username); }
-    async handleListUsers()           { return this.admin.handleListUsers(); }
-    async handleRevokeUser(username)  { return this.admin.handleRevokeUser(username); }
-    async handleAdminStatus()         { return this.admin.handleAdminStatus(); }
-    async handleFallbackChain()       { return this.fallbackChain.handleFallbackChainMenu(); }
+    async handleInvite(username) { return this.admin.handleInvite(username); }
+    async handleListUsers() { return this.admin.handleListUsers(); }
+    async handleRevokeUser(username) { return this.admin.handleRevokeUser(username); }
+    async handleAdminStatus() { return this.admin.handleAdminStatus(); }
 
     // ── Callback dispatcher
     async handleCallback(callbackQueryId, data, messageId) {

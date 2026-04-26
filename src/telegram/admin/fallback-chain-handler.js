@@ -39,7 +39,6 @@ export class FallbackChainHandler {
   // ── Status / main screen ──────────────────────────────────────────
 
   async handleFallbackChainMenu() {
-    if (!this.ctx.isAdmin) return;
     const userCfg = this.ctx.readEnvFile();
     const enabled = isFallbackChainEnabled(userCfg);
     const chain = getFallbackChain(userCfg);
