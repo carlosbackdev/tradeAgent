@@ -9,6 +9,9 @@ import { config } from '../config/config.js';
 import { CRON_PRESETS } from './entities/cronPresets.js';
 import { PROVIDER_MODELS } from '../agent/entities/models.js';
 import { COINS } from '../agent/entities/coins.js';
+import { AdminHandlers } from './admin/admin-handlers.js';
+import { CallbackHandler } from './response/callback-handler.js';
+import { FallbackChainHandler } from './admin/fallback-chain-handler.js';
 
 // ── Cron presets ──────────────────────────────────────────────────
 // Imported from entities/cronPresets.js
@@ -23,6 +26,9 @@ export class TelegramHandlers {
     constructor(botContext) {
         this.ctx = botContext;
         this.configState = { isConfiguring: false, isInviting: false, selectedKey: null };
+        this.admin = new AdminHandlers(botContext);
+        this.fallbackChain = new FallbackChainHandler(botContext);
+        this.callbackHandler = new CallbackHandler(this, this.configState, botContext);
     }
 
     get isConfiguring() {
@@ -57,6 +63,7 @@ export class TelegramHandlers {
 
         if (this.ctx.isAdmin) {
             initKeyboard.inline_keyboard.push([{ text: '👑 ADMIN PANEL', callback_data: '/admin' }]);
+            initKeyboard.inline_keyboard.push([{ text: '🔗 FALLBACK CHAIN', callback_data: '/fallback_chain' }]);
         }
 
         const uConfig = this.ctx.readEnvFile();
@@ -329,6 +336,30 @@ export class TelegramHandlers {
             return;
         }
 
+        if (this.configState.isConfiguring && this.configState.mode === 'awaiting_provider_token') {
+            const token = text.trim();
+            const provider = this.configState.pendingProvider;
+            const providerKey = `AI_PROVIDER_API_KEY_${provider.toUpperCase()}`;
+
+            // update() auto-propagates AI_PROVIDER_API_KEY → provider-specific key,
+            // but we also save providerKey directly to be explicit and immediate.
+            this.ctx.updateEnvFile('AI_PROVIDER_API_KEY', token);
+            this.ctx.updateEnvFile(providerKey, token);
+
+            this.configState.isConfiguring = false;
+            this.configState.mode = null;
+            this.configState.selectedKey = null;
+            this.configState.pendingProvider = null;
+
+            await this.ctx.sendMessage(
+                `✅ <b>API Token de ${provider.toUpperCase()} guardada</b>\n\n` +
+                `🔑 <code>${token.substring(0, 8)}...</code>\n\n` +
+                `La token ha sido activada para este provider.`,
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⚙️ API CONFIG', callback_data: '/configuration' }]] } }
+            );
+            return;
+        }
+
         if (this.configState.isConfiguring && this.configState.mode === 'asking') {
             const question = text.trim();
             const symbol = this.configState.symbol;
@@ -463,228 +494,15 @@ export class TelegramHandlers {
         }
     }
 
-    // ── Admin Handlers ──────────────────────────────────────────
+    // ── Admin Handlers
+    async handleInvite(username)      { return this.admin.handleInvite(username); }
+    async handleListUsers()           { return this.admin.handleListUsers(); }
+    async handleRevokeUser(username)  { return this.admin.handleRevokeUser(username); }
+    async handleAdminStatus()         { return this.admin.handleAdminStatus(); }
+    async handleFallbackChain()       { return this.fallbackChain.handleFallbackChainMenu(); }
 
-    async handleInvite(username) {
-        if (!username) {
-            await this.ctx.sendMessage('❌ Uso: `/invite @username`');
-            return;
-        }
-        const { inviteUser } = await import('../users/user-registry.js');
-        const result = await inviteUser({
-            telegramUsername: username.replace('@', ''),
-            invitedBy: String(this.ctx.chatId)
-        });
-
-        if (result.ok) {
-            const botUsername = process.env.TELEGRAM_BOT_USERNAME;
-            if (!botUsername) {
-                await this.ctx.sendMessage(`✅ @${result.username} ha sido invitado. Configura TELEGRAM_BOT_USERNAME para generar el enlace de invitación.`);
-                return;
-            }
-
-            const inviteLink = `https://t.me/${botUsername}?start=invite_${result.inviteCode}`;
-            await this.ctx.sendMessage(
-                `✅ @${result.username} ha sido invitado.\n\n` +
-                `Pásale este enlace para activar su acceso:\n${inviteLink}`
-            );
-        } else {
-            await this.ctx.sendMessage(`⚠️ ${result.reason}`);
-        }
-    }
-
-    async handleListUsers() {
-        const { listUsers } = await import('../users/user-registry.js');
-        const users = await listUsers();
-        if (!users.length) {
-            await this.ctx.sendMessage('No hay usuarios registrados.');
-            return;
-        }
-
-        const statusEmoji = { pending_invite: '⏳', pending_setup: '🔧', active: '✅', suspended: '🚫' };
-        let msg = `👥 <b>Usuarios registrados</b> (${users.length})\n\n`;
-        for (const u of users) {
-            const emoji = statusEmoji[u.status] || '❓';
-            msg += `${emoji} @${u.telegram_username || '?'} — ${u.status}\n`;
-            msg += `   ID: <code>${u.telegram_id || 'pte'}</code> | Pares: ${u.config?.TRADING_PAIRS || '—'}\n`;
-        }
-        await this.ctx.sendMessage(msg, { parse_mode: 'HTML' });
-    }
-
-    async handleRevokeUser(username) {
-        if (!username) {
-            await this.ctx.sendMessage('❌ Uso: `/revoke @username`');
-            return;
-        }
-        const { revokeUser } = await import('../users/user-registry.js');
-        const result = await revokeUser(username.replace('@', ''));
-
-        if (result.ok) {
-            await this.ctx.sendMessage(`🚫 @${result.username} ha sido suspendido.`);
-            // Note: Session destruction is handled by the multi-user-bot router reactively if needed
-        } else {
-            await this.ctx.sendMessage(`⚠️ ${result.reason}`);
-        }
-    }
-
-    async handleAdminStatus() {
-        const { listUsers } = await import('../users/user-registry.js');
-        const users = await listUsers();
-        const active = users.filter(u => u.status === 'active').length;
-        const pending = users.filter(u => u.status === 'pending_setup' || u.status === 'pending_invite').length;
-
-        await this.ctx.sendMessage(
-            `🤖 <b>Admin Status</b>\n\n` +
-            `👥 Total usuarios: ${users.length}\n` +
-            `✅ Activos: ${active}\n` +
-            `🔧 Pendientes: ${pending}\n` +
-            `🖥 Node: ${process.version}`,
-            { parse_mode: 'HTML' }
-        );
-    }
-    async handleConfigurationAgent() {
-        const userCfg = this.ctx.readEnvFile();
-        const keys = userCfg.editableKeysAgent;
-        const params = keys.map(key => {
-            const value = userCfg.getRaw(key) || '(—)';
-            let unit = '';
-            if (key.includes('INTERVAL')) unit = ' min';
-            if (key.includes('PCT')) unit = ' %';
-            if (key.includes('MIN_ORDER')) unit = ' USD';
-            return { key, value: `${value}${unit}` };
-        });
-
-        const text = formatConfigMessage(params);
-
-        this.configState.isConfiguring = true;
-        this.configState.mode = 'agent';
-        this.configState.selectedKey = null;
-        await this.ctx.sendMessage(text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
-    }
-
+    // ── Callback dispatcher
     async handleCallback(callbackQueryId, data, messageId) {
-        await this.ctx.answerCallback(callbackQueryId);
-
-        // Handle coin selections from the inline keyboard
-        if (data.startsWith('/')) {
-            if (data === '/init') return await this.handleInit();
-            if (data === '/start') return await this.handleStart();
-            if (data === '/help') return await this.handleHelp();
-            if (data === '/status') return await this.handleStatus();
-            if (data === '/configuration') return await this.handleConfiguration();
-            if (data === '/cron') return await this.handleCron();
-            if (data === '/stats') return await this.handleTradingStats();
-            if (data === '/agent') return await this.handleConfigurationAgent();
-            if (data === '/ask') return await this.handleAsk();
-            if (data === '/admin') return await this.handleAdminMenu();
-            if (data === '/users') return await this.handleListUsers();
-            if (data === '/admin_status') return await this.handleAdminStatus();
-
-            const symbol = data.substring(1).toUpperCase();
-            if (COINS.some(c => c.symbol === symbol)) {
-                await this.handleCoinCommand(symbol);
-                return;
-            }
-        }
-
-        if (data === 'admin_invite_prompt') {
-            if (!this.ctx.isAdmin) return;
-            this.configState.isInviting = true;
-            this.configState.isConfiguring = false;
-            this.configState.mode = null;
-            await this.ctx.sendMessage(
-                '<b>👤 NUEVA INVITACIÓN</b>\n\n' +
-                'Escribe a continuación el <b>@nombre_de_usuario</b> o el <b>ID numérico</b> del usuario que quieres autorizar.\n\n' +
-                '<i>Nota: El usuario debe tener un alias (@) configurado en Telegram, o puedes usar su ID numérico.</i>',
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 CANCELAR', callback_data: '/admin' }]] } }
-            );
-            return;
-        }
-
-        if (data === 'cron_on') {
-            const ok = this.ctx.startCron(this.ctx.cronSchedule);
-            await this.ctx.editMessage(messageId,
-                ok
-                    ? `✅ Cron activado\nSchedule: ${this.ctx.cronSchedule}`
-                    : `❌ Error activando cron. Schedule actual: ${this.ctx.cronSchedule}`
-            );
-            return;
-        }
-
-        if (data === 'cron_off') {
-            this.ctx.stopCron();
-            await this.ctx.editMessage(messageId, '⏹ Cron desactivado.');
-            return;
-        }
-
-        if (data === 'cron_now') {
-            await this.ctx.editMessage(messageId, '⏳ Ejecutando ciclo ahora...');
-            try {
-                const userCfg = this.ctx.readEnvFile();
-                const pairs = userCfg.trading?.pairs || userCfg.editableKeysAgent;
-                for (const coin of pairs) {
-                    await runAgentCycle('manual', coin, '', userCfg);
-                }
-                await this.ctx.editMessage(messageId, '✅ Ciclo completado. Revisa el reporte abajo ↓');
-            } catch (err) {
-                await this.ctx.editMessage(messageId, `❌ Error: ${err.message}`);
-            } finally {
-                await this.handleInit();
-            }
-            return;
-        }
-
-        if (data.startsWith('cron_set_')) {
-            const expr = data.replace('cron_set_', '');
-            const ok = this.ctx.startCron(expr);
-            await this.ctx.editMessage(messageId,
-                ok
-                    ? `✅ Cron actualizado\nCiclo: ${CronParse(expr)}\nEstado: ACTIVO`
-                    : `❌ Error con schedule: ${expr}`
-            );
-            return;
-        }
-
-        if (data.startsWith('ask_coin:')) {
-            const symbol = data.split(':')[1];
-            this.configState.isConfiguring = true;
-            this.configState.mode = 'asking';
-            this.configState.symbol = symbol;
-
-            await this.ctx.editMessage(messageId,
-                `💬 <b>PREGUNTA PARA ${symbol}</b>\n\nEscribe tu pregunta ahora. El agente analizará el mercado y responderá teniendo en cuenta tu consulta.`,
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 CANCELAR', callback_data: '/ask' }]] } }
-            );
-            return;
-        }
-
-        if (data.startsWith('SET_AGENT_CFG:')) {
-            const [, key, value] = data.split(':');
-            let ok = this.ctx.updateEnvFile(key, value);
-
-            // Auto-reset model if provider changes
-            if (ok && key === 'AI_PROVIDER') {
-                const defaultModel = PROVIDER_MODELS[value]?.[0] || '';
-                if (defaultModel) {
-                    this.ctx.updateEnvFile('AI_MODEL', defaultModel);
-                }
-            }
-
-            this.configState.isConfiguring = false;
-            this.configState.selectedKey = null;
-            this.configState.mode = null;
-
-            const backButton = key.includes('AI_')
-                ? { text: '⚙️ API CONFIG', callback_data: '/configuration' }
-                : { text: '🤖 VOLVER A AGENTE', callback_data: '/agent' };
-
-            await this.ctx.editMessage(messageId,
-                ok
-                    ? `✅ <b>${key}</b> actualizado a <code>${value}</code>`
-                    : `❌ Error actualizando ${key}`,
-                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[backButton]] } }
-            );
-            return;
-        }
+        return this.callbackHandler.handle(callbackQueryId, data, messageId);
     }
 }

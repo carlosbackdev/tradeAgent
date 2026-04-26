@@ -4,7 +4,7 @@
  */
 
 import { logger } from '../../utils/logger.js';
-import { callAiWithCustomPrompt } from '../services/clientAgent.js';
+import { clientAgentInstance } from '../job/client-agent-main.js';
 import {
   buildOpenOrderAnalysisContext,
   buildOpenOrderAnalysisMessage,
@@ -25,7 +25,7 @@ export async function analyzeOpenOrderWithAi(openOrder, analyzerContext, symbol,
 
     logger.info(`📨 OPEN ORDER ANALYZER → AI payload:\n${userMessage}`);
 
-    const decision = await callAiWithCustomPrompt(userMessage, apiKey, model, tradingConfig, systemPrompt, llmConfig);
+    const decision = await clientAgentInstance.callAiWithCustomPrompt(userMessage, apiKey, model, tradingConfig, systemPrompt, llmConfig);
     const payload = Array.isArray(decision?.decisions) ? decision.decisions[0] : decision;
 
     if (!payload || !payload.action) {

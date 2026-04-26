@@ -95,20 +95,22 @@ export class UserSession {
   updateConfig(key, value) {
     const normalizedValue = typeof value === 'string' ? value.trim() : value;
 
-    if (key === 'AI_PROVIDER_API_KEY' || key === 'ANTHROPIC_API_KEY') {
+    // Validate any API key (generic or provider-specific)
+    if (key === 'AI_PROVIDER_API_KEY' || key === 'ANTHROPIC_API_KEY' || key.startsWith('AI_PROVIDER_API_KEY_')) {
       const apiKey = String(normalizedValue || '');
       if (!apiKey || apiKey.length < 10) {
-        this._send(`❌ <b>API Key inválida</b>
-
-La clave debe tener al menos 10 caracteres.`, { parse_mode: 'HTML' }).catch(() => { });
+        this._send(`❌ <b>API Key inválida</b>\n\nLa clave debe tener al menos 10 caracteres.`, { parse_mode: 'HTML' }).catch(() => { });
         return false;
       }
     }
 
-    // Update in-memory
+    // Update in-memory raw config
     const cfg = this.user.config || {};
     cfg[key] = normalizedValue;
     this.user.config = cfg;
+
+    // Build the MongoDB patch (may include extra keys)
+    const patch = { [key]: normalizedValue };
 
     // Rebuild trading/debug/etc sub-objects
     const parseNum = (val, fb) => { const n = parseFloat(String(val || '').replace(',', '.')); return isNaN(n) ? fb : n; };
@@ -134,9 +136,27 @@ La clave debe tener al menos 10 caracteres.`, { parse_mode: 'HTML' }).catch(() =
     } else if (key === 'AI_MODEL') {
       this.userConfig.llm.model = normalizedValue;
     } else if (key === 'AI_PROVIDER_API_KEY') {
+      // Save generically AND under the current provider's specific key
       this.userConfig.llm.apiKey = normalizedValue;
+      const currentProvider = this.userConfig.llm.provider || 'anthropic';
+      const providerKey = `AI_PROVIDER_API_KEY_${currentProvider.toUpperCase()}`;
+      cfg[providerKey] = normalizedValue;
+      patch[providerKey] = normalizedValue;
+    } else if (key.startsWith('AI_PROVIDER_API_KEY_')) {
+      // Direct provider-specific key — also update active llm.apiKey if it matches current provider
+      const currentProvider = this.userConfig.llm.provider || 'anthropic';
+      const expectedKey = `AI_PROVIDER_API_KEY_${currentProvider.toUpperCase()}`;
+      if (key === expectedKey) {
+        this.userConfig.llm.apiKey = normalizedValue;
+      }
     } else if (key === 'AI_PROVIDER') {
       this.userConfig.llm.provider = normalizedValue;
+      // Reload apiKey from stored provider-specific key (if exists)
+      const providerKey = `AI_PROVIDER_API_KEY_${normalizedValue.toUpperCase()}`;
+      const storedKey = cfg[providerKey] || process.env[providerKey] || '';
+      if (storedKey) {
+        this.userConfig.llm.apiKey = storedKey;
+      }
     } else if (key === 'REVOLUT_API_KEY') {
       this.userConfig.revolut.apiKey = normalizedValue;
     } else if (key === 'REVOLUT_BASE_URL') {
@@ -152,7 +172,7 @@ La clave debe tener al menos 10 caracteres.`, { parse_mode: 'HTML' }).catch(() =
     }
 
     // Persist to MongoDB
-    updateUserConfig(this.userId, { [key]: normalizedValue }).catch(err =>
+    updateUserConfig(this.userId, patch).catch(err =>
       logger.warn(`Failed to persist config for user ${this.userId}: ${err.message}`)
     );
     return true;
@@ -161,6 +181,9 @@ La clave debe tener al menos 10 caracteres.`, { parse_mode: 'HTML' }).catch(() =
   async showUserConfig() {
     const cfg = this.user.config || {};
     const dry = this.userConfig.debug.dryRun ? '🔒 DRY RUN' : '🔴 REAL MONEY';
+    const provider = this.userConfig.llm.provider || 'anthropic';
+    const providerKey = `AI_PROVIDER_API_KEY_${provider.toUpperCase()}`;
+    const activeKey = cfg[providerKey] || cfg.AI_PROVIDER_API_KEY || '';
 
     await this._send(
       `⚙️ *Tu configuración*\n\n` +
@@ -169,11 +192,11 @@ La clave debe tener al menos 10 caracteres.`, { parse_mode: 'HTML' }).catch(() =
       `💵 Min orden: $${this.userConfig.trading.minOrderUsd}\n` +
       `🎯 TP: ${this.userConfig.trading.takeProfitPct}%\n` +
       `🎯 SL: ${this.userConfig.trading.stopLossPct}%\n` +
-      `🧠 Modelo: ${this.userConfig.llm.model} (${this.userConfig.llm.provider})\n` +
+      `🧠 Modelo: ${this.userConfig.llm.model} (${provider})\n` +
       `🌐 URL Revolut: ${this.userConfig.revolut.baseUrl}\n` +
       `${dry}\n` +
-      `\n🔑 API Key: \`${(cfg.REVOLUT_API_KEY || '').substring(0, 12)}...\`\n` +
-      `🤖 IA: \`${(cfg.AI_PROVIDER_API_KEY || '').substring(0, 10)}...\``
+      `\n🔑 API Key Revolut: \`${(cfg.REVOLUT_API_KEY || '').substring(0, 12)}...\`\n` +
+      `🤖 IA (${provider}): \`${activeKey.substring(0, 10)}...\``
     );
   }
 
