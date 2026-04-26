@@ -66,7 +66,7 @@ export class clientAgentMain {
         raw = await callOpenAICompat(params);
         break;
       case 'groq':
-        raw = await callOpenAICompat({ ...params, baseUrl: 'https://api.groq.com/openai/v1' });
+        raw = await callOpenAICompat({ ...params, baseURL: 'https://api.groq.com/openai/v1' });
         break;
       case 'gemini':
         raw = await callGemini(params);

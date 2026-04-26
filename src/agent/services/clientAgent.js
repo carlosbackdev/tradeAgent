@@ -19,12 +19,12 @@ export async function callAnthropic({ apiKey, model, systemPrompt, userMessage }
   return response.content.map(b => b.text || '').join('').trim();
 }
 
-export async function callOpenAICompat({ apiKey, model, systemPrompt, userMessage, baseUrl }) {
+export async function callOpenAICompat({ apiKey, model, systemPrompt, userMessage, baseURL }) {
   // Works for OpenAI and DeepSeek (both use the OpenAI SDK format)
   const { OpenAI } = await import('openai');
   const client = new OpenAI({
     apiKey,
-    ...(baseUrl ? { baseUrl: baseUrl } : {}),
+    ...(baseURL ? { baseURL } : {}),
   });
   const response = await client.chat.completions.create({
     model,
