@@ -83,6 +83,7 @@ export class clientAgentMain {
 
   async callAgentAnalyzer(userMessage, apiKey = null, model = null, tradingConfig = null, llmConfig = null) {
     logger.info(`🧠 callAgentAnalyzer → provider: ${llmConfig?.provider || config.llm.provider}`);
+    logger.info(`System Prompt: ${getSystemPrompt(tradingConfig || config.trading)}`);
     logger.info('User Message: ', userMessage);
     return this.callAiWithCustomPrompt(userMessage, apiKey, model, tradingConfig, null, llmConfig);
   }
