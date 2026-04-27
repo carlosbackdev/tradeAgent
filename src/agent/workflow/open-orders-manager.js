@@ -184,8 +184,9 @@ export async function processOpenOrders(
           try {
             const currentPrice = analyzerContext.indicators?.[symbol.replace('/', '-')]?.currentPrice || 0;
             const availableUsd = Number(analyzerContext.balances?.fiat?.USD || 0);
-            const qtyFromPct = (analysis.positionPct > 0 && currentPrice > 0)
-              ? (availableUsd * analysis.positionPct / currentPrice)
+            const pct = Number(analysis.positionPct || 0) / 100;
+            const qtyFromPct = (pct > 0 && currentPrice > 0)
+              ? (availableUsd * pct / currentPrice)
               : 0;
             const buyQuantity = analysis.buy_more_quantity || qtyFromPct || (order.quantity || (order.base_size || 0));
             const buyAmount = Number(buyQuantity) * Number(currentPrice);
