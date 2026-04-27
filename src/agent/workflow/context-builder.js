@@ -105,6 +105,7 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
         const sumVolumes = last30Data.recentVolumes.reduce((a, b) => a + b, 0);
         last30Data.avgVolume5 = parseFloat((sumVolumes / last5Candles.length).toFixed(0));
       }
+
     }
 
     const normalizedSymbol = String(snapshot.symbol || '').replace('/', '-');
@@ -120,6 +121,10 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
       : null;
     const volatilityRegime = classifyVolatilityRegime(atrPctOfPrice);
     const moveSignificance = classifyMoveSignificance(latestMovePct, atrPctOfPrice);
+
+    // ── PRICE NARRATIVE ──
+    last30Data.priceNarrative = buildPriceNarrative(changesPercent, atrPctOfPrice);
+
     const regimeSummary = buildRegimeSummary(normalizedIndicators, {
       latestMovePct,
       totalChangePct: last30Data.totalChangePct,
@@ -424,4 +429,79 @@ function extractRelevantBalances(balances, indicators = {}, priceMap = {}, manag
   };
 
   return structured;
+}
+
+/**
+ * Convierte el array de cambios % en una narrativa estructurada
+ * que el LLM puede razonar sin ver el gráfico.
+ */
+function buildPriceNarrative(changesPercent = [], atrPctOfPrice = null) {
+  if (!Array.isArray(changesPercent) || changesPercent.length < 5) return null;
+
+  const recent = changesPercent.slice(-5);
+  const prior = changesPercent.slice(-15, -5);
+  const allData = changesPercent;
+
+  const dominance = (arr) => {
+    if (!arr || arr.length === 0) return 'mixed';
+
+    const ups = arr.filter((x) => Number(x) > 0).length;
+    const downs = arr.filter((x) => Number(x) < 0).length;
+
+    if (ups > downs * 1.5) return 'bullish';
+    if (downs > ups * 1.5) return 'bearish';
+    return 'mixed';
+  };
+
+  const avgAbs = (arr) => {
+    if (!arr || arr.length === 0) return 0;
+    return arr.reduce((sum, x) => sum + Math.abs(Number(x) || 0), 0) / arr.length;
+  };
+
+  const avgAbsRecent = avgAbs(recent);
+  const avgAbsPrior = prior.length > 0 ? avgAbs(prior) : avgAbsRecent;
+
+  const momentumShiftPct = avgAbsPrior > 0
+    ? parseFloat((((avgAbsRecent - avgAbsPrior) / avgAbsPrior) * 100).toFixed(1))
+    : 0;
+
+  const lastValue = recent[recent.length - 1];
+  const lastDirection = Number(lastValue) >= 0 ? 1 : -1;
+
+  const consistentCount = recent.filter((x) => {
+    const sign = Math.sign(Number(x));
+    return sign === lastDirection || (sign === 0 && lastDirection === 1);
+  }).length;
+
+  let pattern = 'no_clear_pattern';
+  const last3 = changesPercent.slice(-3);
+
+  if (last3.length === 3) {
+    if (last3.every((x) => Number(x) > 0)) pattern = 'three_consecutive_green';
+    else if (last3.every((x) => Number(x) < 0)) pattern = 'three_consecutive_red';
+    else if (Number(last3[0]) < 0 && Number(last3[1]) < 0 && Number(last3[2]) > 0) pattern = 'potential_reversal_up';
+    else if (Number(last3[0]) > 0 && Number(last3[1]) > 0 && Number(last3[2]) < 0) pattern = 'potential_reversal_down';
+  }
+
+  let signalQuality = 'unknown';
+
+  if (atrPctOfPrice !== null && atrPctOfPrice !== undefined && Number.isFinite(Number(atrPctOfPrice))) {
+    const atr = Number(atrPctOfPrice);
+    const lastMove = Math.abs(Number(recent[recent.length - 1]) || 0);
+
+    if (lastMove < atr * 0.3) signalQuality = 'noise';
+    else if (lastMove > atr * 1.2) signalQuality = 'strong_move';
+    else signalQuality = 'normal_move';
+  }
+
+  return {
+    recentDominance: dominance(recent),
+    priorDominance: dominance(prior),
+    overallDominance: dominance(allData),
+    momentumShiftPct,
+    recentConsistency: `${consistentCount}/5 velas en misma dirección`,
+    detectedPattern: pattern,
+    lastMoveVsATR: signalQuality,
+    last5Changes: recent.map((x) => parseFloat((Number(x) || 0).toFixed(3))),
+  };
 }

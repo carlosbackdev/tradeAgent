@@ -75,6 +75,28 @@ RULES:
 12. Vision: ${visionAgent.toUpperCase()}-term → prioritize trends matching this horizon.
 13. If the input contains a "question" field, prioritize answering it in "reasoning" and "marketSummary".
 14. HOLD breakout rule: if there are 3 consecutive recent HOLD decisions for the same symbol, you may break the pattern with BUY or SELL only when there is clear directional confirmation. Use recentMarketContext and priceChangeSinceLastAnalysisPct as supporting context for that confirmation. For BUY, require 2 small consecutive bullish candles, MACD bullish cross or bullish bias with improving histogram, price recovering EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. For SELL, require 2 small consecutive bearish candles, MACD bearish cross or bearish bias with worsening histogram, price losing EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. If that confirmation is not present, HOLD remains valid.
+15. crossTfConfluence is mandatory risk gating:
+    - If crossTfConfluence[symbol].gate=false, base timeframe and higher timeframe conflict directionally.
+    - In that case, confidence MUST be capped at 50.
+    - Prefer HOLD unless there is a very strong single-indicator extreme such as RSI < 25 or RSI > 75, or unless managing an already profitable open position with a small partial SELL.
+    - A BUY/SELL against a failed Cross-TF gate requires explicit justification.
+16. crossTfConfluence[symbol].gate=true means both timeframes are directionally compatible.
+    You may consider BUY/SELL only if normal risk rules, spread rules, volatility rules, volume rules and position exposure rules also allow it.
+17. volumeContext helps evaluate whether price action is supported by volume:
+    - bearish_divergence means price is rising while OBV is falling. Treat the move as weak and reduce confidence.
+    - bullish_divergence means price is falling while OBV is rising. Treat it as possible accumulation, but require confirmation.
+    - volume_quality='low' during a BUY signal means reduce positionPct by 30%.
+    - volume_quality='high' can support a signal only if trend, Cross-TF gate and risk rules also agree.
+18. Use recentMarketContext[symbol].last30.priceNarrative as visual chart context:
+    - recentDominance shows the last 5 candles direction.
+    - priorDominance shows the previous 10 candles direction.
+    - momentumShiftPct > 0 means movement is accelerating.
+    - momentumShiftPct < 0 means movement is fading.
+    - detectedPattern can suggest continuation or reversal, but never overrides Cross-TF, volume, risk or exposure rules.
+19. Portfolio exposure rule:
+    - If cryptoPercentage is above 80%, do not BUY unless there is exceptional confirmation and crossTfConfluence[symbol].gate=true.
+    - If cryptoPercentage is above 80% and the open position is profitable, a small partial SELL is allowed only to reduce exposure or lock profits.
+    - Never increase exposure when Cross-TF gate is false, volume_quality is low, or volatility_regime is low with small move significance.
 
 Write "marketSummary", "reasoning" and "risks" in Spanish. All other fields in English.
 

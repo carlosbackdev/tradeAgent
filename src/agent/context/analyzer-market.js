@@ -30,6 +30,7 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
       lastExecutedOrder: context.lastExecutedOrder || null,
       rendimiento: context.rendimiento !== undefined ? context.rendimiento : null,
       tradingStats: context.tradingStats || null,
+      recentTradingSummary: context.recentTradingSummary || null,
       currentPrice: context.currentPrice ?? null,
       lastPrice: context.lastPrice ?? null,
       priceChangeSinceLastAnalysisPct: context.priceChangeSinceLastAnalysisPct ?? 0,
@@ -40,6 +41,7 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
     decisionContext: {
       indicators: normalizedIndicatorsBySymbol,
       higherTimeframe: context.higherTimeframe || null,
+      crossTfConfluence: context.crossTfConfluence || null,
       regimeSummary: regimeSummaryBySymbol,
       atrContext: atrBySymbol,
       recentMarketContext: recentMarketContextBySymbol,
@@ -80,6 +82,7 @@ function normalizeIndicatorsBySymbol(indicators) {
         positionPct: parsePercent(raw.bbPosition),
       },
       confluence: raw.confluence || null,
+      volumeContext: raw.volumeContext || null,
       signals: Array.isArray(raw.signals) ? raw.signals : [],
       aliases: {
         macdLine: raw.macdLine,

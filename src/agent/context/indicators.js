@@ -10,13 +10,14 @@ import {
   EMA,
   MACD,
   BollingerBands,
+  OBV,
 } from 'technicalindicators';
 
 /**
  * Given an array of candle closes (oldest → newest), compute a full
  * indicator suite and return a flat object Model AI can reason about.
  */
-export function computeIndicators(closes) {
+export function computeIndicators(closes, candles = null) {
   if (closes.length < 26) {
     return { error: 'Not enough data (need ≥26 closes)' };
   }
@@ -84,6 +85,57 @@ export function computeIndicators(closes) {
       ema26: last(ema26)
     }),
   };
+
+  // ── Volume context ──
+  let volumeContext = null;
+
+  if (Array.isArray(candles) && candles.length >= 20) {
+    const volumes = candles.map((c) => Number(c.volume || 0));
+    const candleCloses = candles.map((c) => Number(c.close));
+
+    const hasValidVolumes = volumes.some((v) => v > 0);
+    const hasValidCloses = candleCloses.every((v) => Number.isFinite(v));
+
+    if (hasValidVolumes && hasValidCloses) {
+      const obvValues = OBV.calculate({
+        close: candleCloses,
+        volume: volumes,
+      });
+
+      if (obvValues.length >= 6) {
+        const lastObv = obvValues[obvValues.length - 1];
+        const prevObv = obvValues[obvValues.length - 6];
+
+        const obvTrend = lastObv > prevObv ? 'accumulation' : 'distribution';
+
+        const recentVols = volumes.slice(-20);
+        const avgVol20 = recentVols.reduce((sum, v) => sum + v, 0) / recentVols.length;
+        const lastVol = volumes[volumes.length - 1];
+        const volRatio = avgVol20 > 0 ? lastVol / avgVol20 : 1;
+
+        const priceTrendUp = candleCloses[candleCloses.length - 1] > candleCloses[candleCloses.length - 6];
+
+        let divergence = 'none';
+
+        if (priceTrendUp && obvTrend === 'distribution') {
+          divergence = 'bearish_divergence';
+        }
+
+        if (!priceTrendUp && obvTrend === 'accumulation') {
+          divergence = 'bullish_divergence';
+        }
+
+        volumeContext = {
+          obv_trend: obvTrend,
+          volume_ratio: Number(volRatio.toFixed(4)),
+          volume_quality: volRatio > 1.5 ? 'high' : volRatio < 0.5 ? 'low' : 'normal',
+          price_vol_divergence: divergence,
+        };
+      }
+    }
+  }
+
+  result.volumeContext = volumeContext;
 
   // Compute confluence after signals are derived
   result.confluence = computeConfluence({
@@ -202,4 +254,164 @@ export function closesFromCandles(candlesArray = []) {
   return candlesArray
     .map(c => Number(c.close))
     .filter(n => Number.isFinite(n));
+}
+
+/**
+ * Computa un score de confluencia cruzada entre TF base y TF superior.
+ * Retorna { score, gate, signals, conflicts, reason }
+ *
+ * gate = true  → señal tiene alineación TF → vale la pena considerar
+ * gate = false → TFs contradictorios → preferir HOLD
+ */
+export function computeCrossTfConfluence(baseTfIndicators, higherTfIndicators) {
+  if (!baseTfIndicators || !higherTfIndicators) {
+    return {
+      score: 0,
+      gate: false,
+      signals: [],
+      conflicts: ['Missing TF data'],
+      reason: 'Missing TF data',
+    };
+  }
+
+  const signals = [];
+  const conflicts = [];
+
+  const toNumber = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const getMacdHistogram = (tf) => {
+    return toNumber(
+      tf?.macdHistogram ??
+      tf?.macd?.histogram ??
+      tf?.aliases?.macdHistogram
+    );
+  };
+
+  const getRsi = (tf) => {
+    return toNumber(
+      tf?.rsi14 ??
+      tf?.rsi ??
+      tf?.aliases?.rsi14
+    );
+  };
+
+  const getSignalList = (tf) => {
+    return [
+      ...(tf?.signals || []),
+      ...(tf?.confluence?.bullishSignals || []),
+      ...(tf?.confluence?.bearishSignals || []),
+    ];
+  };
+
+  const getEmaDirection = (tf) => {
+    const ema12 = toNumber(tf?.ema12 ?? tf?.aliases?.ema12);
+    const ema26 = toNumber(tf?.ema26 ?? tf?.aliases?.ema26);
+    if (ema12 !== null && ema26 !== null) {
+      return ema12 > ema26 ? 'bullish' : 'bearish';
+    }
+    const signalList = getSignalList(tf);
+    if (
+      signalList.includes('EMA_golden_cross') ||
+      signalList.includes('EMA_GOLDEN_CROSS')
+    ) {
+      return 'bullish';
+    }
+    if (
+      signalList.includes('EMA_death_cross') ||
+      signalList.includes('EMA_DEATH_CROSS')
+    ) {
+      return 'bearish';
+    }
+    return null;
+  };
+
+  const getMacdDirection = (tf) => {
+    const histogram = getMacdHistogram(tf);
+    if (histogram !== null) {
+      return histogram > 0 ? 'bullish' : 'bearish';
+    }
+    const signalList = getSignalList(tf);
+    if (
+      signalList.includes('MACD_bearish_histogram') ||
+      signalList.includes('MACD_BEARISH_CROSS') ||
+      signalList.includes('MACD_bearish_cross')
+    ) {
+      return 'bearish';
+    }
+    if (
+      signalList.includes('MACD_bullish_histogram') ||
+      signalList.includes('MACD_BULLISH_CROSS') ||
+      signalList.includes('MACD_bullish_cross')
+    ) {
+      return 'bullish';
+    }
+    return null;
+  };
+
+  const baseEmaDirection = getEmaDirection(baseTfIndicators);
+  const higherEmaDirection = getEmaDirection(higherTfIndicators);
+
+  if (baseEmaDirection && higherEmaDirection) {
+    if (baseEmaDirection === higherEmaDirection) {
+      signals.push(`EMA_aligned_${baseEmaDirection}`);
+    } else {
+      conflicts.push('EMA_direction_conflict');
+    }
+  }
+
+  const baseMacdDirection = getMacdDirection(baseTfIndicators);
+  const higherMacdDirection = getMacdDirection(higherTfIndicators);
+
+  if (baseMacdDirection && higherMacdDirection) {
+    if (baseMacdDirection === higherMacdDirection) {
+      signals.push(`MACD_aligned_${baseMacdDirection}`);
+    } else {
+      conflicts.push('MACD_direction_conflict');
+    }
+  }
+
+  const baseRsi = getRsi(baseTfIndicators);
+  const higherRsi = getRsi(higherTfIndicators);
+
+  if (baseRsi !== null && higherRsi !== null) {
+    if ((baseRsi < 35 && higherRsi > 65) || (baseRsi > 65 && higherRsi < 35)) {
+      conflicts.push('RSI_extreme_divergence');
+    } else {
+      signals.push('RSI_zones_compatible');
+    }
+  }
+
+  const baseSuggestion = baseTfIndicators?.confluence?.suggestion;
+  const higherSuggestion = higherTfIndicators?.confluence?.suggestion;
+
+  if (baseSuggestion && higherSuggestion && baseSuggestion === higherSuggestion) {
+    signals.push(`confluence_aligned_${baseSuggestion}`);
+  } else if (
+    baseSuggestion &&
+    higherSuggestion &&
+    baseSuggestion !== 'NEUTRAL' &&
+    higherSuggestion !== 'NEUTRAL' &&
+    baseSuggestion !== higherSuggestion
+  ) {
+    conflicts.push('confluence_suggestion_conflict');
+  }
+
+  const score = signals.length - conflicts.length;
+  const hardConflict = conflicts.some((c) =>
+    c.includes('EMA') || c.includes('MACD')
+  );
+  const gate = score >= 1 && !hardConflict;
+
+  return {
+    score,
+    gate,
+    signals,
+    conflicts,
+    reason: gate
+      ? `${signals.length} señales alineadas entre TFs`
+      : `Conflicto multi-TF: ${conflicts.length ? conflicts.join(', ') : 'insufficient alignment'}`,
+  };
 }

@@ -3,7 +3,7 @@
  * Orchestrates one full agent cycle using modular workflow components
  */
 
-import { computeIndicators, closesFromCandles } from './context/indicators.js';
+import { computeIndicators, closesFromCandles, computeCrossTfConfluence } from './context/indicators.js';
 import { notify, notifyError } from '../telegram/handles.js';
 import { formatDecision, formatOpenOrdersMessage } from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
@@ -30,6 +30,7 @@ import { checkForcedDecisions } from './workflow/decision-engine.js';
 import { buildAnalyzerContext } from './workflow/context-builder.js';
 import { executeDecisions } from './workflow/order-executor.js';
 import { processOpenOrders } from './workflow/open-orders-manager.js';
+import { buildFinalContext } from './context/formatters/context-summary.js';
 
 export async function runAgentCycle(triggerReason = 'cron', coin, question = '', userConfig = null) {
   const startTime = Date.now();
@@ -62,7 +63,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       try {
         const candlesArray = snap.candles?.candles || snap.candles || [];
         const closes = closesFromCandles(candlesArray);
-        const computed = computeIndicators(closes);
+        const computed = computeIndicators(closes, candlesArray);
 
         if (computed.error) {
           logger.warn(`⚠️ ${snap.symbol}: ${computed.error}`);
@@ -82,7 +83,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     let higherTfIndicators = null;
     if (higherTfCandles?.candles?.length >= 26) {
       const htfCloses = closesFromCandles(higherTfCandles.candles);
-      const htfComputed = computeIndicators(htfCloses);
+      const htfComputed = computeIndicators(htfCloses, higherTfCandles.candles);
       if (!htfComputed.error) {
         higherTfIndicators = {
           interval: higherTfInterval,
@@ -95,6 +96,20 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
         };
         logger.debug(`📈 Higher TF (${higherTfInterval}m) indicators computed for ${coin}`);
       }
+    }
+
+    // ── 2.1 Compute Cross-TF Confluence ──
+    const crossTfConfluence = {};
+    if (higherTfIndicators && indicators[snapshot.symbol]) {
+      const confluence = computeCrossTfConfluence(
+        indicators[snapshot.symbol],
+        higherTfIndicators
+      );
+      crossTfConfluence[snapshot.symbol] = confluence;
+
+      logger.info(
+        `🔀 Cross-TF gate ${snapshot.symbol}: ${confluence.gate} | score=${confluence.score} | ${confluence.reason}`
+      );
     }
 
     // ── 3. Fetch open lots and check SL/TP (EARLY) ──────────────────
@@ -250,6 +265,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       };
     }
 
+    analyzerContext.crossTfConfluence = crossTfConfluence;
+
     // ── 4.2 Check for open orders (with FULL context) ────────────────
     // openOrders already fetched from fetchMarketData
     const normalizedCoin = coin.replace('/', '-');
@@ -344,12 +361,18 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       };
     }
 
-    // Build the Model AI context only with open orders for this coin.
-    const analyzerContextForAi = {
-      ...analyzerContext,
-      openOrders: openOrdersThisCoin,
-    };
-    const AiPayload = buildAnalyzerMessage(analyzerContextForAi, question, effectiveConfig.trading, coin);
+    // ── 4.4 Build final cleaned context for LLM ───────────────────
+    const AiPayload = buildAnalyzerMessage(
+      buildFinalContext(analyzerContext, {
+        openLots: openPositionSummary?.openLots,
+        recentSells,
+        lastOrder,
+        openOrdersThisCoin
+      }),
+      question,
+      effectiveConfig.trading,
+      coin
+    );
 
     // ── 5. Get AI decision or use forced decision ──────────────
     let decision;
