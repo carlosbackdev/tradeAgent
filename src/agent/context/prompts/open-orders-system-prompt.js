@@ -70,7 +70,11 @@ RESPONSE: strict JSON only, no markdown, no extra text:
       "limitPrice": null,
       "positionPct": 20,
       "confidence": 72,
+<<<<<<< HEAD
       "reasoning": "explicacion completa y especifica en espanol maximo 500 caracteres",
+=======
+      "reasoning": "resumen breve en espanol",
+>>>>>>> 6dc93a0aa748f4aef48269b93601e6a289acd767
       "risks": "riesgos en espanol"
     }
   ],
