@@ -184,6 +184,10 @@ export function formatConfigMessage(params) {
   params.forEach((p, i) => {
     if (p.key === "MAX_TRADE_SIZE") {
       msg += `${i + 1}. <b>${p.key}</b>\n   └ <code>${p.value > 1 ? p.value + '%' : p.value * 100 + '%'}</code>\n`;
+    } else if (p.key === "TAKE_PROFIT_PCT" || p.key === "STOP_LOSS_PCT") {
+      msg += `${i + 1}. <b>${p.key}</b>\n   └ <code>${p.value + '%'}</code>\n`;
+    } else if (p.key === "INDICATORS_CANDLES_INTERVAL") {
+      msg += `${i + 1}. <b>${p.key}</b>\n   └ <code>${p.value + 'min'}</code>\n`;
     } else {
       msg += `${i + 1}. <b>${p.key}</b>\n   └ <code>${p.value}</code>\n`;
     }

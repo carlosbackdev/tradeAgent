@@ -395,8 +395,13 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       } catch (err) {
         throw new Error(`LLM analysis failed: ${err.message}`);
       }
-      decision.takeProfit = effectiveConfig.trading.takeProfitPct;
-      decision.stopLoss = effectiveConfig.trading.stopLossPct;
+    }
+
+    if (decision && Array.isArray(decision.decisions)) {
+      for (const d of decision.decisions) {
+        d.takeProfit = d.takeProfit || effectiveConfig.trading.takeProfitPct;
+        d.stopLoss = d.stopLoss || effectiveConfig.trading.stopLossPct;
+      }
     }
 
     if (!decision || !Array.isArray(decision.decisions)) {

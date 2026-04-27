@@ -41,7 +41,6 @@ Priority inside botState: openLots is the primary live position source of truth.
 - higherTimeframe: Macro trend context 
 — entry decisions should align with this (optional)
 - previousDecisions: Recent decision history to avoid flip-flopping
-- trading limits from config: MAX_POSITION_PCT=${maxTradeSize}, MIN_ORDER_PCT=${effectiveMinOrderUsd}, TAKE_PROFIT_PCT=${takeProfitPct || '2-3'}, STOP_LOSS_PCT=${stopLossPct || '1-2'}
 Decide: BUY, SELL, or HOLD for Symbol. Use the technical indicators and the "confluence" suggestion as a weak directional hint, not as a final decision. Prioritize exchange reality, open position state, ATR-relative move significance, and regimeSummary.
 
 When signals conflict, prioritize data in this order:
