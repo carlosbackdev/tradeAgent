@@ -84,7 +84,9 @@ Profit protection rule:
 
 Entry rule:
 - BUY requires stronger confirmation than SELL.
-- Recommend not BUY with crossTfConfluence[symbol].gate=false unless you consider your entry time to be good.
+- Do not BUY when crossTfConfluence[symbol].gate=false.
+- If there is no open position and gate=true, a small starter BUY is allowed with moderate improving signals: BUY_SIGNAL or improving MACD, higherTimeframe not SELL_SIGNAL, volume not low, price recovering/above EMA12, and confidence >= 60.
+- Starter BUY must be small: 10-25% of maxTradeSize. If it would be below minOrderUsd, raise it just enough to meet minOrderUsd or HOLD.
 - Do not BUY during cooldown after a recent defensive SELL or STOP_LOSS unless there is exceptional renewed confirmation.
 - If there was a recent BUY decision for the same symbol within 6 hours and there is no fresh confirmation, avoid adding exposure.
 
