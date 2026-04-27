@@ -22,6 +22,24 @@ function safeParse(val) {
   return Number.isNaN(p) ? null : p;
 }
 
+function normalizeSymbol(symbol) {
+  return String(symbol || '').replace('/', '-').toUpperCase();
+}
+
+function toNullableNumber(value, fallback = null) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function resolvePositionQty(positionSummary = {}) {
+  return Number(
+    positionSummary?.totalOpenQty ??
+    positionSummary?.totalQty ??
+    positionSummary?.qty ??
+    0
+  );
+}
+
 export {
   connectDB,
   disconnectDB,
@@ -39,6 +57,7 @@ export async function saveDecision(decision, trigger = 'cron', chatId = null) {
     action: decision.action,
     confidence: decision.confidence,
     reasoning: decision.reasoning,
+    summaryReasoning: decision.summaryReasoning || null,
     marketSummary: decision.marketSummary || null,
     risks: decision.risks,
     trigger,
@@ -50,6 +69,17 @@ export async function saveDecision(decision, trigger = 'cron', chatId = null) {
     stopLoss: decision.stopLoss || null,
     rendimiento: decision.rendimiento !== undefined ? decision.rendimiento : null,
     model: decision.model || null,
+    forced: decision.forced === true,
+    forcedReason: decision.forcedReason || null,
+    defensive: decision.defensive === true,
+    defensiveReason: decision.defensiveReason || null,
+    lifecyclePhase: decision.lifecyclePhase || null,
+    riskFactors: Array.isArray(decision.riskFactors) ? decision.riskFactors : [],
+    maxRoiSeen: decision.maxRoiSeen !== undefined ? safeParse(decision.maxRoiSeen) : null,
+    currentRoi: decision.currentRoi !== undefined ? safeParse(decision.currentRoi) : null,
+    profitRetracementPct: decision.profitRetracementPct !== undefined ? safeParse(decision.profitRetracementPct) : null,
+    positionLifecyclePhase: decision.positionLifecyclePhase || null,
+    fifoMatched: typeof decision.fifoMatched === 'boolean' ? decision.fifoMatched : null,
   };
 
   try {
@@ -82,6 +112,17 @@ export async function saveOrder({
   realizedPnlUsd = null,
   realizedRoiPct = null,
   fifoMatches = null,
+  forced = false,
+  forcedReason = null,
+  defensive = false,
+  defensiveReason = null,
+  lifecyclePhase = null,
+  riskFactors = [],
+  maxRoiSeen = null,
+  currentRoi = null,
+  profitRetracementPct = null,
+  positionLifecyclePhase = null,
+  fifoMatched = null,
 }) {
   const db = await connectDB();
   const ordersCollection = db.collection('orders');
@@ -107,6 +148,17 @@ export async function saveOrder({
     status,
     error: error || null,
     rendimiento: rendimiento !== undefined ? safeParse(rendimiento) : null,
+    forced: forced === true,
+    forced_reason: forcedReason || null,
+    defensive: defensive === true,
+    defensive_reason: defensiveReason || null,
+    lifecycle_phase: lifecyclePhase || null,
+    risk_factors: Array.isArray(riskFactors) ? riskFactors : [],
+    max_roi_seen: maxRoiSeen !== null ? safeParse(maxRoiSeen) : null,
+    current_roi: currentRoi !== null ? safeParse(currentRoi) : null,
+    profit_retracement_pct: profitRetracementPct !== null ? safeParse(profitRetracementPct) : null,
+    position_lifecycle_phase: positionLifecyclePhase || null,
+    fifo_matched: typeof fifoMatched === 'boolean' ? fifoMatched : null,
   };
 
   if (status === 'executed') {
@@ -359,6 +411,7 @@ export async function getOpenPositionSummary(symbol, currentPrice, chatId = null
     const roiPct = cost > 0 ? (pnlUsd / cost) * 100 : 0;
 
     return {
+      symbol: normalizeSymbol(symbol),
       _id: lot._id,
       created_at: lot.created_at,
       remaining_qty: remainingQty,
@@ -382,6 +435,174 @@ export async function getOpenPositionSummary(symbol, currentPrice, chatId = null
     unrealizedPnlUsd: Number(unrealizedPnlUsd.toFixed(2)),
     unrealizedRoiPct: Number(unrealizedRoiPct.toFixed(2)),
     oldestOpenLot: enrichedLots.length > 0 ? enrichedLots[0] : null,
+  };
+}
+
+export async function getActivePositionLifecycleStates(chatId = null, { excludeSymbol = null, limit = 10 } = {}) {
+  const db = await connectDB();
+  const lifecycleCollection = db.collection('position_lifecycle');
+
+  const query = { active: true };
+  if (chatId) query.chat_id = String(chatId);
+  if (excludeSymbol) query.symbol = { $ne: normalizeSymbol(excludeSymbol) };
+
+  return lifecycleCollection
+    .find(query)
+    .sort({ updated_at: -1 })
+    .limit(Math.max(1, Number(limit) || 10))
+    .toArray();
+}
+
+export async function getPositionLifecycleState(symbol, chatId = null) {
+  const db = await connectDB();
+  const lifecycleCollection = db.collection('position_lifecycle');
+  const normalizedSymbol = normalizeSymbol(symbol);
+
+  const query = { symbol: normalizedSymbol };
+  if (chatId) query.chat_id = String(chatId);
+
+  const doc = await lifecycleCollection.findOne(query);
+  return doc || null;
+}
+
+export async function updatePositionLifecycleState({
+  symbol,
+  chatId = null,
+  positionSummary = null,
+  currentPrice = null,
+  minOrderUsd = 0
+}) {
+  const db = await connectDB();
+  const lifecycleCollection = db.collection('position_lifecycle');
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const now = new Date();
+
+  const query = { symbol: normalizedSymbol };
+  if (chatId) query.chat_id = String(chatId);
+
+  const existing = await lifecycleCollection.findOne(query);
+  const safeSummary = positionSummary || {};
+
+  const totalQty = resolvePositionQty(safeSummary);
+  const avgEntryPrice = toNullableNumber(safeSummary?.avgEntryPrice, 0);
+  const currentRoi = toNullableNumber(safeSummary?.unrealizedRoiPct, 0);
+  const effectiveCurrentPrice = toNullableNumber(currentPrice, 0);
+  const estimatedUsdValue = Number((Math.max(0, totalQty) * Math.max(0, effectiveCurrentPrice)).toFixed(2));
+  const isBelowMinOrder = Number(minOrderUsd) > 0 && estimatedUsdValue > 0 && estimatedUsdValue < Number(minOrderUsd);
+  const isResidual = isBelowMinOrder || (estimatedUsdValue > 0 && estimatedUsdValue < 15);
+  const previousMaxRoi = toNullableNumber(existing?.max_unrealized_roi_pct, currentRoi);
+  const maxRoiSeen = Math.max(previousMaxRoi ?? currentRoi, currentRoi);
+  const profitRetracementPct = Number((maxRoiSeen - currentRoi).toFixed(4));
+
+  let phase = 'IN_POSITION';
+  let active = totalQty > 0;
+
+  if (!active) {
+    phase = 'NO_POSITION';
+  } else if (isBelowMinOrder) {
+    phase = 'RESIDUAL_DUST';
+  } else if (maxRoiSeen >= 1.5 && currentRoi <= (maxRoiSeen - 0.8)) {
+    phase = 'PROFIT_RETRACEMENT';
+  } else if (currentRoi > 0) {
+    phase = 'IN_PROFIT';
+  } else if (currentRoi < 0) {
+    phase = 'IN_DRAWDOWN';
+  }
+
+  const mergedRiskFactors = Array.isArray(existing?.risk_factors) ? existing.risk_factors : [];
+
+  const nextState = {
+    chat_id: chatId ? String(chatId) : null,
+    symbol: normalizedSymbol,
+    active,
+    phase,
+    current_roi_pct: Number(currentRoi.toFixed(4)),
+    max_unrealized_roi_pct: Number(maxRoiSeen.toFixed(4)),
+    profit_retracement_pct: Number(profitRetracementPct.toFixed(4)),
+    total_qty: Number(totalQty.toFixed(8)),
+    avg_entry_price: Number(avgEntryPrice.toFixed(8)),
+    current_price: Number(effectiveCurrentPrice.toFixed(8)),
+    estimated_usd_value: estimatedUsdValue,
+    is_residual: isResidual,
+    is_below_min_order: isBelowMinOrder,
+    last_action: existing?.last_action || null,
+    last_defensive_sell_at: existing?.last_defensive_sell_at || null,
+    last_exit_at: existing?.last_exit_at || null,
+    cooldown_until: existing?.cooldown_until || null,
+    risk_factors: mergedRiskFactors,
+    updated_at: now,
+  };
+
+  await lifecycleCollection.updateOne(
+    query,
+    {
+      $set: nextState,
+      $setOnInsert: { created_at: now },
+    },
+    { upsert: true }
+  );
+
+  return {
+    ...nextState,
+    created_at: existing?.created_at || now,
+  };
+}
+
+export async function markLifecycleAfterSell({
+  symbol,
+  chatId = null,
+  actionType = 'SELL',
+  cooldownMinutes = 360,
+  riskFactors = null,
+  phase = null
+}) {
+  const db = await connectDB();
+  const lifecycleCollection = db.collection('position_lifecycle');
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const now = new Date();
+  const safeCooldownMinutes = Math.max(0, Number(cooldownMinutes) || 0);
+  const cooldownUntil = safeCooldownMinutes > 0
+    ? new Date(now.getTime() + (safeCooldownMinutes * 60 * 1000))
+    : null;
+
+  const query = { symbol: normalizedSymbol };
+  if (chatId) query.chat_id = String(chatId);
+
+  const existing = await lifecycleCollection.findOne(query);
+  const isDefensive = String(actionType || '').toUpperCase().includes('DEFENSIVE');
+  const updateSet = {
+    chat_id: chatId ? String(chatId) : null,
+    symbol: normalizedSymbol,
+    last_action: actionType,
+    updated_at: now,
+    cooldown_until: cooldownUntil,
+  };
+
+  if (phase) {
+    updateSet.phase = phase;
+  }
+  if (Array.isArray(riskFactors)) {
+    updateSet.risk_factors = riskFactors;
+  }
+  if (isDefensive) {
+    updateSet.last_defensive_sell_at = now;
+  } else {
+    updateSet.last_exit_at = now;
+  }
+
+  await lifecycleCollection.updateOne(
+    query,
+    {
+      $set: updateSet,
+      $setOnInsert: { created_at: now },
+    },
+    { upsert: true }
+  );
+
+  return {
+    ...existing,
+    ...updateSet,
+    created_at: existing?.created_at || now,
   };
 }
 

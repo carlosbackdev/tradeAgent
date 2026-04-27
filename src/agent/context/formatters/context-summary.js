@@ -6,6 +6,7 @@
 export function formatOpenLots(lots) {
   if (!Array.isArray(lots)) return [];
   return lots.map(lot => ({
+    symbol: String(lot.symbol || '').replace('/', '-'),
     created_at: lot.created_at instanceof Date ? lot.created_at.toISOString() : (lot.created_at || 'unknown'),
     remaining_qty: lot.remaining_qty,
     entry_price: lot.entry_price,
@@ -13,37 +14,6 @@ export function formatOpenLots(lots) {
     unrealized_pnl_usd: lot.unrealized_pnl_usd,
     unrealized_roi_pct: lot.unrealized_roi_pct
   }));
-}
-
-export function summarizeRecentSells(sells, limit = 3) {
-  if (!Array.isArray(sells)) return [];
-  return sells.slice(0, limit).map(s => ({
-    created_at: s.created_at instanceof Date ? s.created_at.toISOString() : (s.created_at || 'unknown'),
-    qty: s.qty,
-    price: s.price,
-    usd_amount: s.usd_amount,
-    realized_pnl_usd: s.realized_pnl_usd,
-    realized_roi_pct: s.realized_roi_pct,
-    reasoning: s.decisionContext?.reasoning || 'No reasoning available'
-  }));
-}
-
-export function formatLastSell(order) {
-  if (!order || order.side !== 'sell') return null;
-  const createdAt = order.created_at instanceof Date ? order.created_at : new Date(order.created_at);
-  const ageMs = Date.now() - createdAt.getTime();
-  const ageMinutes = Math.floor(ageMs / 60000);
-
-  return {
-    created_at: createdAt.toISOString(),
-    lastSellAgeMinutes: ageMinutes,
-    qty: order.qty,
-    price: order.price,
-    usd_amount: order.usd_amount,
-    realized_pnl_usd: order.realized_pnl_usd,
-    realized_roi_pct: order.realized_roi_pct,
-    reasoning: order.decisionContext?.reasoning || 'No reasoning available'
-  };
 }
 
 /**
@@ -82,12 +52,7 @@ export function cleanContextForAi(obj) {
  * and formatting complex objects into concise summaries.
  */
 export function buildFinalContext(analyzerContext, params) {
-  const { 
-    openLots, 
-    recentSells, 
-    lastOrder, 
-    openOrdersThisCoin 
-  } = params;
+  const { openLots, openOrdersThisCoin } = params;
 
   const recentTradingSummary = {
     recentClosedTrades: analyzerContext.tradingStats?.closedTrades || 0,
@@ -95,8 +60,7 @@ export function buildFinalContext(analyzerContext, params) {
     losingTrades: analyzerContext.tradingStats?.losingTrades || 0,
     winRate: analyzerContext.tradingStats?.winRate || 0,
     accumulatedRendimiento: analyzerContext.tradingStats?.accumulatedRendimiento || 0,
-    recentSells: summarizeRecentSells(recentSells, 3),
-    lastSell: formatLastSell(lastOrder),
+    lastSellSummary: analyzerContext.lastSellSummary || null,
   };
 
   const normalizeSide = (side) => {
@@ -117,9 +81,7 @@ export function buildFinalContext(analyzerContext, params) {
       created_at: o.created_at
     })),
     recentTradingSummary,
-    // Explicitly remove heavy/redundant fields
     recentSells: undefined,
-    lastExecutedOrder: undefined,
   };
 
   return cleanContextForAi(analyzerContextForAi);

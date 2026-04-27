@@ -182,8 +182,6 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
 
   const botState = {
     openLots: tradingStatsForAI?.openPositions || [],
-    recentSells: [],
-    lastExecutedOrder: null,
     rendimiento: null,
     rendimientoAcumulado: tradingStatsForAI?.accumulatedRendimiento ?? null,
     tradingStats: tradingStatsForAI,
@@ -226,7 +224,6 @@ export async function buildAnalyzerContext(balances, openOrders, indicators, coi
     pairs: compactPairs,
     indicators,
     previousDecisions: {}, // Placeholder, filled in executor if needed
-    lastExecutedOrder: null, // Placeholder, filled in executor if needed
     rendimiento: null, // Placeholder, filled in executor if needed
     tradingStats: tradingStatsForAI
   };
