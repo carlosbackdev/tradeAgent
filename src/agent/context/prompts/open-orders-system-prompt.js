@@ -71,8 +71,6 @@ RESPONSE: strict JSON only, no markdown, no extra text:
       "orderType": "market" | null,
       "limitPrice": null,
       "positionPct": 20,
-      "takeProfit": null,
-      "stopLoss": null,
       "confidence": 72,
       "reasoning": "summary short reasoning for next analysis in Spanish.",
       "risks": "in spanish."
@@ -81,7 +79,7 @@ RESPONSE: strict JSON only, no markdown, no extra text:
   "marketSummary": "1-2 sentence market assessment in Spanish."
 }
 
-KEEP/CANCEL → positionPct: 0, orderType: null, limitPrice: null, takeProfit: null, stopLoss: null.
+KEEP/CANCEL → positionPct: 0, orderType: null, limitPrice: null.
 BUY_MORE → orderType: "market", positionPct > 0 and <= ${maxTradeSize}. 
 
 Be decisive but prudent. Avoid over-trading.`;

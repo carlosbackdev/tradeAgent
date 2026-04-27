@@ -7,10 +7,10 @@ import { logger } from '../../utils/logger.js';
 import { config } from '../../config/config.js';
 import { getSystemPrompt } from '../context/prompts/trading-system-prompt.js';
 import { parseLlmJsonResponse } from '../services/functions/json-parser.js';
-import { 
-  callAnthropic, 
-  callOpenAICompat, 
-  callGemini 
+import {
+  callAnthropic,
+  callOpenAICompat,
+  callGemini
 } from '../services/clientAgent.js';
 
 export class clientAgentMain {
@@ -80,10 +80,6 @@ export class clientAgentMain {
     return decision;
   }
 
-  /** @deprecated Use callAiWithCustomPrompt */
-  async callClaudeWithCustomPrompt(...args) {
-    return this.callAiWithCustomPrompt(...args);
-  }
 
   async callAgentAnalyzer(userMessage, apiKey = null, model = null, tradingConfig = null, llmConfig = null) {
     logger.info(`🧠 callAgentAnalyzer → provider: ${llmConfig?.provider || config.llm.provider}`);

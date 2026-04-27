@@ -190,12 +190,25 @@ export async function processOpenOrders(
             const buyQuantity = analysis.buy_more_quantity || qtyFromPct || (order.quantity || (order.base_size || 0));
             const buyAmount = Number(buyQuantity) * Number(currentPrice);
 
+            // ── Auto-calculate TP/SL for BUY_MORE (consistent with main executor) ──
+            const tpPct = tradingConfig.takeProfitPct || 0;
+            const slPct = tradingConfig.stopLossPct || 0;
+            let tpPrice = null;
+            let slPrice = null;
+
+            if (currentPrice > 0) {
+              if (tpPct > 0) tpPrice = (currentPrice * (1 + tpPct / 100)).toFixed(2);
+              if (slPct > 0) slPrice = (currentPrice * (1 - slPct / 100)).toFixed(2);
+            }
+
             const newOrder = await orderManager.placeOrder({
               symbol,
               side: 'buy',
               type: 'market',
               usdAmount: buyAmount,
-              currentPrice
+              currentPrice,
+              takeProfit: tpPrice,
+              stopLoss: slPrice,
             });
 
             if (newOrder) {
@@ -217,8 +230,8 @@ export async function processOpenOrders(
                     positionPct: null,
                     usdAmount,
                     revolutOrderId: newOrder.id,
-                    takeProfit: null,
-                    stopLoss: null,
+                    takeProfit: tpPrice,
+                    stopLoss: slPrice,
                     riskRewardRatio: null,
                     status: 'executed',
                     error: null,
