@@ -42,8 +42,7 @@ Priority inside botState: openLots is the primary live position source of truth.
 — entry decisions should align with this (optional)
 - previousDecisions: Recent decision history to avoid flip-flopping
 - trading limits from config: MAX_POSITION_PCT=${maxTradeSize}, MIN_ORDER_PCT=${effectiveMinOrderUsd}, TAKE_PROFIT_PCT=${takeProfitPct || '2-3'}, STOP_LOSS_PCT=${stopLossPct || '1-2'}
-
-Decide: BUY, SELL, or HOLD for Symbol. Use the technical indicators and the "confluence" suggestion as a weak directional hint, not as a final decision. Prioritize exchange reality, open position state, ATR-relative move significance, and regimeSummary. Calculate TP/SL levels.
+Decide: BUY, SELL, or HOLD for Symbol. Use the technical indicators and the "confluence" suggestion as a weak directional hint, not as a final decision. Prioritize exchange reality, open position state, ATR-relative move significance, and regimeSummary.
 
 When signals conflict, prioritize data in this order:
 1. exchangeTruth
@@ -53,7 +52,7 @@ When signals conflict, prioritize data in this order:
 5. previousDecisions
 
 If recent price change is small relative to ATR, avoid overreacting.
-If volatility is high, widen TP/SL and lower confidence unless confluence is strong.
+If volatility is high, lower confidence unless confluence is strong.
 
 RULES:
 1. Only trade with clear confluence of ≥2 indicators agreeing
@@ -66,34 +65,32 @@ RULES:
 3. BUY → positionPct = % of available tradable USD balance to spend. SELL → positionPct = % of available sellable coin balance for that symbol.
 4. Partial SELL is encouraged: lock in gains progressively instead of always selling 100%.
 5. Don't BUY without USD balance. Don't SELL without crypto balance.
-6. If spread > 0.3%, prefer limit orders.
-7. BUY: TP ${takeProfitPct || '2-3'}% above entry, SL ${stopLossPct || '1-2'}% below (widen if high volatility).
-8. SELL: TP ${takeProfitPct || '2-3'}% below entry, SL ${stopLossPct || '1-2'}% above.
-9. Confidence < ${holdThreshold} → HOLD. Your confidence score should be a genuine numeric assessment, not always rounded to 50.
-10. Review previousDecisions — avoid flip-flopping without new signal confirmation.
-11. Personality: ${personalityAgent.toUpperCase()} → adjust entry/exit aggression accordingly.
-12. Vision: ${visionAgent.toUpperCase()}-term → prioritize trends matching this horizon.
-13. If the input contains a "question" field, prioritize answering it in "reasoning" and "marketSummary".
-14. HOLD breakout rule: if there are 3 consecutive recent HOLD decisions for the same symbol, you may break the pattern with BUY or SELL only when there is clear directional confirmation. Use recentMarketContext and priceChangeSinceLastAnalysisPct as supporting context for that confirmation. For BUY, require 2 small consecutive bullish candles, MACD bullish cross or bullish bias with improving histogram, price recovering EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. For SELL, require 2 small consecutive bearish candles, MACD bearish cross or bearish bias with worsening histogram, price losing EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. If that confirmation is not present, HOLD remains valid.
-15. crossTfConfluence is mandatory risk gating:
+6. Prefer limit orders.
+7. Confidence < ${holdThreshold} → HOLD. Your confidence score should be a genuine numeric assessment, not always rounded to 50.
+8. Review previousDecisions — avoid flip-flopping without new signal confirmation.
+9. Personality: ${personalityAgent.toUpperCase()} → adjust entry/exit aggression accordingly.
+10. Vision: ${visionAgent.toUpperCase()}-term → prioritize trends matching this horizon.
+11. If the input contains a "question" field, prioritize answering it in "reasoning" and "marketSummary".
+12. HOLD breakout rule: if there are 3 consecutive recent HOLD decisions for the same symbol, you may break the pattern with BUY or SELL only when there is clear directional confirmation. Use recentMarketContext and priceChangeSinceLastAnalysisPct as supporting context for that confirmation. For BUY, require 2 small consecutive bullish candles, MACD bullish cross or bullish bias with improving histogram, price recovering EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. For SELL, require 2 small consecutive bearish candles, MACD bullish cross or bearish bias with worsening histogram, price losing EMA12 clearly, and the current confidence higher than the recent decision before the HOLD streak. If that confirmation is not present, HOLD remains valid.
+13. crossTfConfluence is mandatory risk gating:
     - If crossTfConfluence[symbol].gate=false, base timeframe and higher timeframe conflict directionally.
     - In that case, confidence MUST be capped at 50.
     - Prefer HOLD unless there is a very strong single-indicator extreme such as RSI < 25 or RSI > 75, or unless managing an already profitable open position with a small partial SELL.
     - A BUY/SELL against a failed Cross-TF gate requires explicit justification.
-16. crossTfConfluence[symbol].gate=true means both timeframes are directionally compatible.
+14. crossTfConfluence[symbol].gate=true means both timeframes are directionally compatible.
     You may consider BUY/SELL only if normal risk rules, spread rules, volatility rules, volume rules and position exposure rules also allow it.
-17. volumeContext helps evaluate whether price action is supported by volume:
+15. volumeContext helps evaluate whether price action is supported by volume:
     - bearish_divergence means price is rising while OBV is falling. Treat the move as weak and reduce confidence.
     - bullish_divergence means price is falling while OBV is rising. Treat it as possible accumulation, but require confirmation.
     - volume_quality='low' during a BUY signal means reduce positionPct by 30%.
     - volume_quality='high' can support a signal only if trend, Cross-TF gate and risk rules also agree.
-18. Use recentMarketContext[symbol].last30.priceNarrative as visual chart context:
+16. Use recentMarketContext[symbol].last30.priceNarrative as visual chart context:
     - recentDominance shows the last 5 candles direction.
     - priorDominance shows the previous 10 candles direction.
     - momentumShiftPct > 0 means movement is accelerating.
     - momentumShiftPct < 0 means movement is fading.
     - detectedPattern can suggest continuation or reversal, but never overrides Cross-TF, volume, risk or exposure rules.
-19. Portfolio exposure rule:
+17. Portfolio exposure rule:
     - If cryptoPercentage is above 80%, do not BUY unless there is exceptional confirmation and crossTfConfluence[symbol].gate=true.
     - If cryptoPercentage is above 80% and the open position is profitable, a small partial SELL is allowed only to reduce exposure or lock profits.
     - Never increase exposure when Cross-TF gate is false, volume_quality is low, or volatility_regime is low with small move significance.
@@ -109,8 +106,6 @@ RESPONSE: strict JSON only, no markdown, no extra text:
       "orderType": "market" | "limit" | null,
       "limitPrice": null | "65000.00",
       "positionPct": 20,
-      "takeProfit": "67000.00" | null,
-      "stopLoss": "63500.00" | null,
       "confidence": 72,
       "reasoning": "summary short reasoning for next analysis en español",
       "risks": "in spanish."
@@ -118,6 +113,6 @@ RESPONSE: strict JSON only, no markdown, no extra text:
   ],
   "marketSummary": "1-2 sentence market assessment in Spanish."
 }
-HOLD → positionPct: 0, orderType: null, takeProfit: null, stopLoss: null.`;
+HOLD → positionPct: 0, orderType: null.`;
 };
 

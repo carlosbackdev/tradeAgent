@@ -34,7 +34,9 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
               confidence: 100,
               reasoning: `Forced Take Profit met at +${rendimiento}% (Avg Entry: $${positionSummary.avgEntryPrice}, Current: $${currentPrice})`,
               orderType: 'market',
-              usdAmount: parseFloat(usdWorth.toFixed(2))
+              usdAmount: parseFloat(usdWorth.toFixed(2)),
+              forced: true,
+              forcedReason: 'TAKE_PROFIT'
             };
           } else if (slPct > 0 && rendimiento <= -slPct) {
             forcedDecision = {
@@ -43,7 +45,9 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
               confidence: 100,
               reasoning: `Forced Stop Loss met at ${rendimiento}% (Avg Entry: $${positionSummary.avgEntryPrice}, Current: $${currentPrice})`,
               orderType: 'market',
-              usdAmount: parseFloat(usdWorth.toFixed(2))
+              usdAmount: parseFloat(usdWorth.toFixed(2)),
+              forced: true,
+              forcedReason: 'STOP_LOSS'
             };
           }
         } else {

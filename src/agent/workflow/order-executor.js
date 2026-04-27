@@ -9,6 +9,7 @@ import { saveOrder, applySellToOpenLots } from '../../services/mongo/mongo-servi
 import { logger } from '../../utils/logger.js';
 import { getAvailableUsdReal, getAvailableCoinReal } from './available-balance.js';
 import { getHoldConfidenceThreshold } from '../context/prompts/confidence-threshold.js';
+import { handleForcedExit } from './forced-exit.js';
 
 export async function executeDecisions(
   decisions,
@@ -187,7 +188,25 @@ export async function executeDecisions(
       }
     }
 
+    // ── Execute Forced Exit Logic (SL/TP) ─────────────────────
+    const forcedResult = await handleForcedExit(d, {
+      orders,
+      openOrders,
+      client,
+      indicators,
+      balanceArray,
+      chatId
+    });
+
+    if (forcedResult.shouldSkip) {
+      execResults.push({ ...d, rendimiento, status: 'skipped', reason: forcedResult.reason });
+      skippedCount++;
+      continue;
+    }
+
     const minOrder = config.trading.minOrderUsd;
+    usd = d.usdAmount || usd;
+
     if (isNaN(usd) || usd < minOrder) {
       execResults.push({
         ...d,
@@ -326,3 +345,4 @@ function normalizeMaxTradeSizePct(rawValue) {
 
   return n;
 }
+

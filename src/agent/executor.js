@@ -405,6 +405,23 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     if (dbConnected) {
       for (const d of decision.decisions) {
         if (!d.symbol) continue;
+
+        // ── Auto-calculate TP/SL if not present (logic moved from LLM to Code) ──
+        const symbolForPrice = d.symbol.replace('/', '-');
+        const currentPrice = indicators[symbolForPrice]?.currentPrice;
+
+        if (currentPrice && d.action !== 'HOLD') {
+          const tpPct = effectiveConfig.trading.takeProfitPct || 0;
+          const slPct = effectiveConfig.trading.stopLossPct || 0;
+
+          if (d.action === 'BUY') {
+            if (tpPct > 0) d.takeProfit = (currentPrice * (1 + tpPct / 100)).toFixed(2);
+            if (slPct > 0) d.stopLoss = (currentPrice * (1 - slPct / 100)).toFixed(2);
+          } else if (d.action === 'SELL') {
+            // On Revolut X SELL is closing. We'll leave it null unless explicitly needed.
+          }
+        }
+
         try {
           const saved = await saveDecision({
             symbol: d.symbol,
@@ -414,7 +431,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
             marketSummary: decision.marketSummary || '',
             risks: d.risks || '',
             positionPct: parseFloat(d.positionPct) || 0,
-            currentPrice: indicators[d.symbol.replace('/', '-')]?.currentPrice || null,
+            currentPrice: currentPrice || null,
             usdAmount: parseFloat(d.usdAmount) || 0,
             orderType: d.orderType || 'market',
             takeProfit: d.takeProfit || null,
