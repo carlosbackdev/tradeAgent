@@ -30,8 +30,13 @@ export function summarizeRecentSells(sells, limit = 3) {
 
 export function formatLastSell(order) {
   if (!order || order.side !== 'sell') return null;
+  const createdAt = order.created_at instanceof Date ? order.created_at : new Date(order.created_at);
+  const ageMs = Date.now() - createdAt.getTime();
+  const ageMinutes = Math.floor(ageMs / 60000);
+
   return {
-    created_at: order.created_at instanceof Date ? order.created_at.toISOString() : (order.created_at || 'unknown'),
+    created_at: createdAt.toISOString(),
+    lastSellAgeMinutes: ageMinutes,
     qty: order.qty,
     price: order.price,
     usd_amount: order.usd_amount,
@@ -95,8 +100,9 @@ export function buildFinalContext(analyzerContext, params) {
   };
 
   const normalizeSide = (side) => {
-    if (side === 'BUYI') return 'BUY';
-    return side;
+    const s = String(side || '').toUpperCase();
+    if (s === 'BUYI') return 'BUY';
+    return s;
   };
 
   const analyzerContextForAi = {

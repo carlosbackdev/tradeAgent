@@ -106,7 +106,18 @@ export function computeIndicators(closes, candles = null) {
         const lastObv = obvValues[obvValues.length - 1];
         const prevObv = obvValues[obvValues.length - 6];
 
-        const obvTrend = lastObv > prevObv ? 'accumulation' : 'distribution';
+        const obvDelta = lastObv - prevObv;
+        const obvChangePct = Math.abs(prevObv) > 0
+          ? (obvDelta / Math.abs(prevObv)) * 100
+          : 0;
+
+        let obvTrend = 'flat';
+
+        if (obvChangePct > 0.5) {
+          obvTrend = 'accumulation';
+        } else if (obvChangePct < -0.5) {
+          obvTrend = 'distribution';
+        }
 
         const recentVols = volumes.slice(-20);
         const avgVol20 = recentVols.reduce((sum, v) => sum + v, 0) / recentVols.length;
@@ -127,6 +138,7 @@ export function computeIndicators(closes, candles = null) {
 
         volumeContext = {
           obv_trend: obvTrend,
+          obv_change_pct: Number(obvChangePct.toFixed(2)),
           volume_ratio: Number(volRatio.toFixed(4)),
           volume_quality: volRatio > 1.5 ? 'high' : volRatio < 0.5 ? 'low' : 'normal',
           price_vol_divergence: divergence,
@@ -158,15 +170,28 @@ function deriveSignals({ currentPrice, rsi, macd, prevMacd, bb, ema12, ema26 }) 
     else if (rsi > 55) signals.push('RSI_BULLISH_ZONE');
   }
 
-  if (macd?.MACD !== undefined && macd?.signal !== undefined) {
-    if (macd.MACD > macd.signal) signals.push('MACD_BULLISH_CROSS');
-    else signals.push('MACD_BEARISH_CROSS');
-
-    // Proper momentum check comparing to previous histogram
-    if (macd.histogram > (prevMacd.histogram || 0)) {
-      signals.push('MACD_MOMENTUM_INCREASING');
+  if (
+    Number.isFinite(macd?.MACD) &&
+    Number.isFinite(macd?.signal) &&
+    Number.isFinite(prevMacd?.MACD) &&
+    Number.isFinite(prevMacd?.signal)
+  ) {
+    if (prevMacd.MACD <= prevMacd.signal && macd.MACD > macd.signal) {
+      signals.push('MACD_BULLISH_CROSS');
+    } else if (prevMacd.MACD >= prevMacd.signal && macd.MACD < macd.signal) {
+      signals.push('MACD_BEARISH_CROSS');
+    } else if (macd.MACD > macd.signal) {
+      signals.push('MACD_BULLISH_BIAS');
     } else {
-      signals.push('MACD_MOMENTUM_DECREASING');
+      signals.push('MACD_BEARISH_BIAS');
+    }
+
+    if (Number.isFinite(macd.histogram) && Number.isFinite(prevMacd.histogram)) {
+      if (macd.histogram > prevMacd.histogram) {
+        signals.push('MACD_MOMENTUM_INCREASING');
+      } else {
+        signals.push('MACD_MOMENTUM_DECREASING');
+      }
     }
   }
 
@@ -207,9 +232,11 @@ function computeConfluence({ rsi, macdHistogram, bbPosition, signals }) {
   if (signals.includes('EMA_GOLDEN_CROSS')) bullish.push('EMA_golden_cross');
   if (signals.includes('EMA_DEATH_CROSS')) bearish.push('EMA_death_cross');
 
-  // MACD cross
+  // MACD cross & bias
   if (signals.includes('MACD_BULLISH_CROSS')) bullish.push('MACD_bullish_cross');
   if (signals.includes('MACD_BEARISH_CROSS')) bearish.push('MACD_bearish_cross');
+  if (signals.includes('MACD_BULLISH_BIAS')) bullish.push('MACD_bullish_bias');
+  if (signals.includes('MACD_BEARISH_BIAS')) bearish.push('MACD_bearish_bias');
 
   // Bollinger Band position (numeric, strip '%')
   const bbPct = parseFloat(bbPosition);
@@ -337,14 +364,18 @@ export function computeCrossTfConfluence(baseTfIndicators, higherTfIndicators) {
     if (
       signalList.includes('MACD_bearish_histogram') ||
       signalList.includes('MACD_BEARISH_CROSS') ||
-      signalList.includes('MACD_bearish_cross')
+      signalList.includes('MACD_bearish_cross') ||
+      signalList.includes('MACD_BEARISH_BIAS') ||
+      signalList.includes('MACD_bearish_bias')
     ) {
       return 'bearish';
     }
     if (
       signalList.includes('MACD_bullish_histogram') ||
       signalList.includes('MACD_BULLISH_CROSS') ||
-      signalList.includes('MACD_bullish_cross')
+      signalList.includes('MACD_bullish_cross') ||
+      signalList.includes('MACD_BULLISH_BIAS') ||
+      signalList.includes('MACD_bullish_bias')
     ) {
       return 'bullish';
     }

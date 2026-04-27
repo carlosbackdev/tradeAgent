@@ -12,6 +12,29 @@ function toUpperSymbol(symbol) {
   return String(symbol || '').replace('/', '-').toUpperCase();
 }
 
+function normalizeSide(side) {
+  const s = String(side || '').toLowerCase();
+  if (s === 'buyi') return 'buy';
+  if (s === 'buy') return 'buy';
+  if (s === 'sell') return 'sell';
+  return s;
+}
+
+function isActiveOrder(order) {
+  const status = String(order?.status || order?.state || '').toLowerCase();
+  if (!status) return true;
+  return ![
+    'filled',
+    'executed',
+    'cancelled',
+    'canceled',
+    'rejected',
+    'failed',
+    'expired',
+    'closed',
+  ].includes(status);
+}
+
 function getOrderType(order) {
   const directType = String(order?.type || order?.order_type || order?.orderType || '').toLowerCase();
   if (directType) return directType;
@@ -62,10 +85,12 @@ export function calculateReservedFromOpenLimitOrders(openOrders = []) {
   };
 
   for (const order of ordersArray) {
+    if (!isActiveOrder(order)) continue;
+
     const orderType = getOrderType(order);
     if (!orderType) continue;
 
-    const side = String(order?.side || '').toLowerCase();
+    const side = normalizeSide(order?.side);
     const normalizedSymbol = toUpperSymbol(order?.symbol);
     if (!normalizedSymbol.includes('-')) continue;
 
