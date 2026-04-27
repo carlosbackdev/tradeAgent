@@ -9,12 +9,9 @@ import { formatDecision, formatOpenOrdersMessage } from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
 import {
   connectDB,
-  saveDecision,
   savePortfolioSnapshot,
   disconnectDB,
   getPreviousDecisions,
-  getExecutedOrders,
-  getDecisionById,
   getOpenPositionSummary,
   getRecentOpenBuyFromOtherSymbols
 } from '../services/mongo/mongo-service.js';
@@ -31,6 +28,9 @@ import { buildAnalyzerContext } from './workflow/context-builder.js';
 import { executeDecisions } from './workflow/order-executor.js';
 import { processOpenOrders } from './workflow/open-orders-manager.js';
 import { buildFinalContext } from './context/formatters/context-summary.js';
+import { applyPortfolioManagerDecision, logPortfolioOverride } from './workflow/portfolio-manager.js';
+import { AnalyzerContextEnricher } from './services/functions/analyzer-context-enricher.js';
+import { DecisionPersistenceService } from '../services/mongo/decision-persistence-service.js';
 
 export async function runAgentCycle(triggerReason = 'cron', coin, question = '', userConfig = null) {
   const startTime = Date.now();
@@ -114,47 +114,13 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     // ── 3. Fetch open lots and check SL/TP (EARLY) ──────────────────
     let openPositionSummary = null;
-    let recentSells = [];
-    let lastOrder = null;
     let rendimiento = null;
+    let lifecycleState = null;
 
     if (dbConnected) {
       try {
         const currentPrice = indicators[snapshot.symbol]?.currentPrice || 0;
         openPositionSummary = await getOpenPositionSummary(coin, currentPrice, chatId);
-
-        if (openPositionSummary && openPositionSummary.openLots.length > 0) {
-          const oldestLot = openPositionSummary.oldestOpenLot;
-          const querySymbol = { $in: [snapshot.symbol, snapshot.symbol.replace('-', '/')] };
-          recentSells = await getExecutedOrders(10, {
-            symbol: querySymbol,
-            side: 'sell',
-            status: 'executed',
-            chat_id: String(chatId),
-            created_at: { $gte: oldestLot.created_at }
-          });
-        }
-
-        // Keep last order fetch for legacy UI/fallback formatting
-        const querySymbol = { $in: [snapshot.symbol, snapshot.symbol.replace('-', '/')] };
-        const orders = await getExecutedOrders(1, { symbol: querySymbol, status: 'executed', chat_id: String(chatId) });
-        if (orders.length > 0) {
-          lastOrder = orders[0];
-          if (lastOrder.decision_id) {
-            const decisionContext = await getDecisionById(lastOrder.decision_id);
-            if (decisionContext) {
-              lastOrder.decisionContext = {
-                reasoning: decisionContext.reasoning,
-                risks: decisionContext.risks,
-                action: decisionContext.action,
-                stopLoss: decisionContext.stopLoss,
-                takeProfit: decisionContext.takeProfit,
-                confidence: decisionContext.confidence,
-                created_at: decisionContext.created_at
-              };
-            }
-          }
-        }
       } catch (err) {
         logger.warn(`⚠️ Failed to fetch position summary context: ${err.message}`);
       }
@@ -185,7 +151,9 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
               action: d.action,
               confidence: d.confidence,
               price: d.currentPrice || null,
-              marketSummary: d.marketSummary?.substring(0, 210) || d.reasoning?.substring(0, 150),
+              summaryReasoning: d.summaryReasoning || null,
+              reasoning: d.reasoning || '',
+              marketSummary: d.marketSummary?.substring(0, 210) || null,
               rendimiento: d.rendimiento !== undefined ? d.rendimiento : null,
             }));
           }
@@ -235,37 +203,22 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
         logger.warn(`⚠️ Failed to build cross-symbol recent open buy context: ${err.message}`);
       }
     }
-
-    // Merge previous decisions and open position context
-    analyzerContext.previousDecisions = previousDecisionsBySymbol;
-    analyzerContext.openLots = openPositionSummary?.openLots || [];
-    analyzerContext.recentSells = recentSells;
-    analyzerContext.lastExecutedOrder = lastOrder;
-    analyzerContext.rendimiento = rendimiento;
-    analyzerContext.rendimientoAcumulado = analyzerContext.tradingStats?.accumulatedRendimiento ?? null;
-    analyzerContext.crossSymbolRecentOpenBuy = crossSymbolRecentOpenBuy;
-    analyzerContext.NextAnalysis = lookbackMinutes;
-    // lastPrice = price at the time of the most recent previous decision for this coin
-    const lastPrice = previousDecisionsBySymbol[snapshot.symbol]?.[0]?.price || lastOrder?.price || 0;
-    const currentPrice = indicators[snapshot.symbol]?.currentPrice || 0;
-
-    analyzerContext.currentPrice = currentPrice;
-    analyzerContext.lastPrice = lastPrice;
-    analyzerContext.priceChangeSinceLastAnalysisPct = (lastPrice > 0 && currentPrice > 0)
-      ? parseFloat(((currentPrice - lastPrice) / lastPrice * 100).toFixed(2))
-      : 0;
-
-    if (higherTfIndicators) {
-      analyzerContext.higherTimeframe = {
-        interval: `${higherTfIndicators.interval}min`,
-        confluence: higherTfIndicators.confluence,
-        rsi14: higherTfIndicators.rsi14,
-        bbPosition: higherTfIndicators.bbPosition,
-        note: "Macro trend context — entry decisions should align with this"
-      };
-    }
-
-    analyzerContext.crossTfConfluence = crossTfConfluence;
+    const { lifecycleState: enrichedLifecycleState } = await AnalyzerContextEnricher.enrich({
+      analyzerContext,
+      previousDecisionsBySymbol,
+      openPositionSummary,
+      rendimiento,
+      crossSymbolRecentOpenBuy,
+      lookbackMinutes,
+      snapshotSymbol: snapshot.symbol,
+      indicators,
+      higherTfIndicators,
+      crossTfConfluence,
+      dbConnected,
+      chatId,
+      minOrderUsd: effectiveConfig?.trading?.minOrderUsd || 0
+    });
+    lifecycleState = enrichedLifecycleState;
 
     // ── 4.2 Check for open orders (with FULL context) ────────────────
     // openOrders already fetched from fetchMarketData
@@ -278,17 +231,11 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       logger.warn(`⚠️ openOrders is not an array: ${typeof openOrders}. Treating as empty.`);
     }
 
-    // Filter open orders: THIS coin vs OTHER coins
+    // Filter open orders for this coin
     const openOrdersThisCoin = ordersArray.filter(order => {
       const orderSymbol = (order.symbol || '').replace('/', '-').toUpperCase();
       const normalizedCoin = coin.replace('/', '-').toUpperCase();
       return orderSymbol === normalizedCoin;
-    });
-
-    const openOrdersOtherCoins = ordersArray.filter(order => {
-      const orderSymbol = (order.symbol || '').replace('/', '-').toUpperCase();
-      const normalizedCoinUpper = normalizedCoin.toUpperCase();
-      return orderSymbol !== normalizedCoinUpper;
     });
 
     // Case 1: Orders for THIS coin (ANY balance) → Procesa with FULL context y CONTINUA
@@ -365,8 +312,6 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     const AiPayload = buildAnalyzerMessage(
       buildFinalContext(analyzerContext, {
         openLots: openPositionSummary?.openLots,
-        recentSells,
-        lastOrder,
         openOrdersThisCoin
       }),
       question,
@@ -404,55 +349,38 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       }
     }
 
+    if (!forcedDecision && decision && Array.isArray(decision.decisions)) {
+      decision.decisions = decision.decisions.map((d) => {
+        const original = { ...d };
+        const nextDecision = applyPortfolioManagerDecision({
+          decision: d,
+          symbol: snapshot.symbol,
+          analyzerContext,
+          positionSummary: openPositionSummary,
+          lifecycleState,
+          config: effectiveConfig
+        });
+        logPortfolioOverride(snapshot.symbol, original, nextDecision);
+        return nextDecision;
+      });
+    }
+
     if (!decision || !Array.isArray(decision.decisions)) {
       throw new Error(`Invalid decision format: ${JSON.stringify(decision)}`);
     }
 
     // ── 6. Save decisions to MongoDB ───────────────────────────────
-    if (dbConnected) {
-      for (const d of decision.decisions) {
-        if (!d.symbol) continue;
-
-        // ── Auto-calculate TP/SL if not present (logic moved from LLM to Code) ──
-        const symbolForPrice = d.symbol.replace('/', '-');
-        const currentPrice = indicators[symbolForPrice]?.currentPrice;
-
-        if (currentPrice && d.action !== 'HOLD') {
-          const tpPct = effectiveConfig.trading.takeProfitPct || 0;
-          const slPct = effectiveConfig.trading.stopLossPct || 0;
-
-          if (d.action === 'BUY') {
-            if (tpPct > 0) d.takeProfit = (currentPrice * (1 + tpPct / 100)).toFixed(2);
-            if (slPct > 0) d.stopLoss = (currentPrice * (1 - slPct / 100)).toFixed(2);
-          } else if (d.action === 'SELL') {
-            // On Revolut X SELL is closing. We'll leave it null unless explicitly needed.
-          }
-        }
-
-        try {
-          const saved = await saveDecision({
-            symbol: d.symbol,
-            action: d.action,
-            confidence: d.confidence,
-            reasoning: d.reasoning || '',
-            marketSummary: decision.marketSummary || '',
-            risks: d.risks || '',
-            positionPct: parseFloat(d.positionPct) || 0,
-            currentPrice: currentPrice || null,
-            usdAmount: parseFloat(d.usdAmount) || 0,
-            orderType: d.orderType || 'market',
-            takeProfit: d.takeProfit || null,
-            stopLoss: d.stopLoss || null,
-            rendimiento: rendimiento !== null ? rendimiento : null,
-            model: decision.usedModel || null,
-          }, triggerReason, chatId);
-
-          d.mongoDecisionId = saved?._id;
-        } catch (err) {
-          logger.warn(`⚠️  Failed to save decision for ${d.symbol}: ${err.message}`);
-        }
-      }
-    }
+    await DecisionPersistenceService.saveCycleDecisions({
+      dbConnected,
+      decisions: decision.decisions,
+      indicators,
+      effectiveConfig,
+      rendimiento,
+      usedModel: decision.usedModel || null,
+      marketSummary: decision.marketSummary || '',
+      triggerReason,
+      chatId
+    });
     logger.info('Decision:', JSON.stringify(decision, null, 2));
 
     // ── 7. Execute decisions ───────────────────────────────────────
@@ -502,3 +430,5 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     }
   }
 }
+
+

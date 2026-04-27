@@ -5,7 +5,7 @@
 
 import { OrderManager } from '../../revolut/orders.js';
 import { notifyOrderExecuted, notifyError } from '../../telegram/handles.js';
-import { saveOrder, applySellToOpenLots } from '../../services/mongo/mongo-service.js';
+import { saveOrder, applySellToOpenLots, markLifecycleAfterSell } from '../../services/mongo/mongo-service.js';
 import { logger } from '../../utils/logger.js';
 import { getAvailableUsdReal, getAvailableCoinReal } from './available-balance.js';
 import { getHoldConfidenceThreshold } from '../context/prompts/confidence-threshold.js';
@@ -55,8 +55,9 @@ export async function executeDecisions(
 
     const rawPositionPct = normalizeForAiPositionPct(d.positionPct ?? 0);
 
+    const maxPctForAction = d.action === 'SELL' ? 100 : maxTradeSizePct;
     const effectivePositionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
-      ? clamp(rawPositionPct, 0, maxTradeSizePct)
+      ? clamp(rawPositionPct, 0, maxPctForAction)
       : 0;
 
     const positionPctDecimal = effectivePositionPct / 100;
@@ -303,8 +304,35 @@ export async function executeDecisions(
             chatId,
             realizedPnlUsd,
             realizedRoiPct,
-            fifoMatches
+            fifoMatches,
+            forced: d.forced === true,
+            forcedReason: d.forcedReason || null,
+            defensive: d.defensive === true,
+            defensiveReason: d.defensiveReason || null,
+            lifecyclePhase: d.lifecyclePhase || null,
+            riskFactors: d.riskFactors || [],
+            maxRoiSeen: d.maxRoiSeen,
+            currentRoi: d.currentRoi,
+            profitRetracementPct: d.profitRetracementPct,
+            positionLifecyclePhase: d.positionLifecyclePhase || null,
+            fifoMatched: typeof d.fifoMatched === 'boolean' ? d.fifoMatched : null
           });
+
+          if (d.action.toLowerCase() === 'sell') {
+            try {
+              const cooldownMinutes = Number(config?.trading?.postSellCooldownMinutes ?? 360);
+              await markLifecycleAfterSell({
+                symbol: d.symbol,
+                chatId,
+                actionType: d.defensive ? 'DEFENSIVE_SELL' : (d.forcedReason || 'SELL'),
+                cooldownMinutes,
+                riskFactors: Array.isArray(d.riskFactors) ? d.riskFactors : null,
+                phase: d.lifecyclePhase || d.positionLifecyclePhase || null
+              });
+            } catch (err) {
+              logger.warn(`⚠️ Failed to mark lifecycle cooldown for ${d.symbol}: ${err.message}`);
+            }
+          }
         } catch (err) {
           logger.warn(`⚠️  Failed to save order: ${err.message}`);
         }
