@@ -1,57 +1,114 @@
 # tradeAgent 🤖
 
-> Autonomous crypto trading agent powered by Agentic AI, operating on Revolut X.  
-> Multi-user architecture via Telegram — each user runs their own isolated trading instance with private credentials, strategy and trade history.
+> Autonomous crypto portfolio trading agent powered by Agentic AI, operating on Revolut X.  
+> Multi-user architecture through Telegram — each user runs an isolated trading instance with private credentials, strategy, cron schedule, portfolio state and trading history.
 
 ---
 
 ## What is this
 
-tradeAgent is a production-ready autonomous trading system that connects real-time market data, computed technical indicators, and an LLM decision engine to execute crypto orders on Revolut X. It operates entirely through Telegram — no web dashboard, no CLI required for end users.
+`tradeAgent` is an autonomous crypto trading agent that connects:
 
-The system is designed around **multi-tenancy**: a single deployed bot instance serves multiple invited users, each with their own API keys, configuration, positions and P&L — completely isolated from one another in MongoDB.
+- Real-time market data from Revolut X
+- Technical indicators
+- Portfolio state
+- Open orders
+- FIFO position tracking
+- Realized and unrealized P&L
+- AI-based decision making
+- Telegram control panel
+- MongoDB persistence
+
+The goal is not only to decide **BUY**, **SELL** or **HOLD**, but to behave as a `portfolio-aware autonomous agent.`
+
+It understands:
+
+- Available fiat balance
+- Current crypto exposure
+- Open positions managed by the bot
+- Open limit orders on the exchange
+- Recent executed orders
+- Previous decisions
+- Current unrealized performance
+- Realized P&L
+- Recent buys in other symbols
+- Risk limits configured by the user
+
+The project is designed around **multi-user isolation**.  
+A single deployed bot can serve multiple invited users, but every user has their own:
+
+- Revolut X credentials
+- AI provider credentials
+- Trading pairs
+- Cron interval
+- Strategy configuration
+- Positions
+- Decisions
+- Orders
+- Portfolio snapshots
+- Trading statistics
 
 ---
 
 ## Architecture
 
-```
+````
+
+## Architecture
+
+```txt
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           TELEGRAM                                   │
-│  User A        User B         User N         Admin                   │
-│  /btc /cron    /eth /status   /sol ...        /invite /users         │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                               ▼
+│                              TELEGRAM                                │
+│                                                                     │
+│  User A          User B          User N           Admin              │
+│  /btc /cron      /eth /stats     /sol ...         /invite /users     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                       multi-user-bot.js                              │
-│  Long-polling loop · Routes each update to the correct UserSession   │
-│  Onboarding wizard (4 steps) · Admin commands                        │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │  one UserSession per active user
-                               ▼
+│                         multi-user-bot.js                            │
+│                                                                     │
+│  Long-polling loop                                                   │
+│  Routes each update to the correct UserSession                       │
+│  Handles onboarding, menus, callbacks and admin commands             │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          UserSession                                 │
-│  Isolated cron task · TelegramHandlers · userConfig (from MongoDB)   │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │  runAgentCycle(coin, userConfig)
-                               ▼
+│                            UserSession                               │
+│                                                                     │
+│  One isolated runtime session per active user                        │
+│  Own config                                                          │
+│  Own cron task                                                       │
+│  Own Telegram handlers                                               │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Agent Cycle — executor.js                       │
-│                                                                      │
-│   0  Connect MongoDB                                                 │
-│   1  Fetch market data ──────────────────────────► Revolut X API     │
-│   2  Compute indicators (RSI, MACD, BB, EMA)                         │
-│   3  Check forced SL / TP from open FIFO lots                        │
-│   4  Build full Model AI context                                       │
-│  4b  Handle open limit orders (keep / cancel / buy_more)             │
-│   5  Call Model AI ─────────────────────────────► Anthropic API     │
-│   6  Save decisions to MongoDB                                       │
-│   7  Execute orders ─────────────────────────────► Revolut X API     │
-│   8  Notify via Telegram                                             │
-│   9  Save portfolio snapshot to MongoDB                              │
-└─────────────────────────────────────────────────────────────────────┘
-```
+│                         Agent Cycle                                  │
+│                                                                     │
+│  1. Fetch balances, market data and open orders                      │
+│  2. Compute indicators                                               │
+│  3. Build portfolio-aware context                                    │
+│  4. Check forced take-profit / stop-loss                             │
+│  5. Analyze pending limit orders                                     │
+│  6. Call AI model or fallback chain                                  │
+│  7. Validate decision with execution guards                          │
+│  8. Place / cancel / skip orders                                     │
+│  9. Save decisions, orders and portfolio snapshot                    │
+│ 10. Notify user through Telegram                                     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+          ┌─────────────────────┼─────────────────────┐
+          ▼                     ▼                     ▼
+   Revolut X API           MongoDB 7              AI Provider
+   Market / Orders         Users / Orders         Anthropic
+   Balances / Ticker       Decisions / FIFO       OpenAI
+   Candles / Auth          Stats / Snapshots      Gemini
+                                                  DeepSeek
+                                                  Groq
+
+````
 
 ---
 
@@ -113,61 +170,373 @@ Candles (OHLCV) from Revolut X
 
 ---
 
+# Main features
+
+## Multi-user Telegram bot
+
+The bot supports multiple users from a single deployment.
+
+Each user can:
+
+- Configure their own Revolut X API key
+- Configure their own private Ed25519 key
+- Configure their own AI provider API key
+- Select trading pairs
+- Start manual analysis
+- Enable or disable cron
+- Change strategy parameters
+- Check trading stats
+- Ask the agent questions
+
+## Autonomous portfolio-aware decision engine
+
+The agent no longer acts only as a simple BUY / SELL predictor.
+
+It receives a full context with:
+
+- Real exchange balances
+- Bot-managed positions
+- Available USD balance
+- Crypto exposure
+- Open orders
+- Open FIFO lots
+- Realized P&L
+- Unrealized P&L
+- Recent market movement
+- Technical indicators
+- Previous decisions
+- Recent executed orders
+- Recent open buy from other symbols
+- Configured max trade size
+- Minimum order
+- Take-profit and stop-loss rules
+
+This makes the agent more consistent as a real autonomous portfolio manager.
+
+## FIFO position tracking
+
+Executed buys are stored as open lots.
+
+When a sell is executed, the system consumes the oldest lots first using FIFO logic.
+
+This allows the bot to calculate:
+
+- Remaining quantity
+- Remaining cost basis
+- Average entry price
+- Realized P&L
+- Realized ROI
+- Unrealized P&L
+- Open position summary
+
+```javascript
+openLots: [
+  {
+    symbol: "BTC-USD",
+    remaining_qty: 0.0012,
+    entry_price: 75600,
+    remaining_cost_usd: 90.72,
+    lot_status: "open",
+  },
+];
+```
+
+When a sell closes part or all of the position, the matching buy lots are updated and the sell order stores the FIFO matches.
+
+## Real trading statistics
+
+The bot stores all decisions and executed orders in MongoDB.
+
+From this, it calculates:
+
+- Total decisions
+- Total executed orders
+- Total buys
+- Total sells
+- Execution rate
+- Realized P&L
+- Realized ROI
+- Total invested
+- Winning trades
+- Losing trades
+- Closed trades
+- Win rate
+- Open positions
+- Manual positions detected from exchange balances
+- Accumulated performance
+
+This makes /stats much more useful than a simple list of orders.
+
+## Open order management
+
+For each open order, it can decide:
+
+- **Keep the order**
+- **Cancel the order**
+- **Buy more**
+
+Cancelled orders are marked as cancelled, so they are not incorrectly treated as active trading history.
+
+## Portfolio guard
+
+The workflow includes portfolio protection logic.
+
+The agent does not blindly trade the full balance. It applies execution guards such as:
+
+- Maximum trade size, Minimum order size
+- Confidence threshold
+- Available balance checks
+- Sell quantity capped by available crypto
+- Buy amount capped by available USD
+- Avoiding orders when balance is insufficient
+- Avoiding duplicated exposure when recent buys exist in other symbols
+
+## AI provider support
+
+The project is designed to support multiple AI providers.
+
+**Supported provider model Ai groups**:
+
+```
+anthropic
+openai
+gemini
+deepseek
+groq
+```
+
+## Fallback chain
+
+The bot can use a fallback chain of up to 3 providers.
+
+```
+Recomended use two models free and one to api pay key
+```
+
+If the first model fails because of rate limit, quota or network error, the agent can automatically try the next provider.
+
+## The Agent — How it thinks
+
+```txt
+User trigger or cron
+        │
+        ▼
+Fetch exchange truth
+        │
+        ├── balances
+        ├── open orders
+        ├── ticker
+        ├── candles
+        └── order book top
+        │
+        ▼
+Compute indicators
+        │
+        ├── RSI 14
+        ├── MACD 12/26/9
+        ├── Bollinger Bands
+        ├── EMA 12 / EMA 26
+        ├── SMA 20
+        ├── ATR
+        └── confluence score
+        │
+        ▼
+Build portfolio context
+        │
+        ├── fiat balance
+        ├── crypto exposure
+        ├── bot-managed positions
+        ├── open FIFO lots
+        ├── previous decisions
+        ├── recent executed order
+        ├── recent buy from other symbol
+        ├── realized P&L
+        └── unrealized P&L
+        │
+        ▼
+Risk and forced exit checks
+        │
+        ├── take profit
+        ├── stop loss
+        ├── confidence threshold
+        ├── max trade size
+        └── min order
+        │
+        ▼
+AI decision
+        │
+        ├── BUY
+        ├── SELL
+        └── HOLD
+        │
+        ▼
+Execution
+        │
+        ├── market order
+        ├── limit order
+        ├── cancel open order
+        └── skip safely
+        │
+        ▼
+
+```
+
+## Project structure
+
+```txt
+tradeAgent/
+├── src/
+│   ├── index.js
+│   ├── multi-user-bot.js
+│   │
+│   ├── agent/
+│   │   ├── executor.js
+│   │   ├── context/
+│   │   │   ├── analyzer-market.js
+│   │   │   ├── indicators.js
+│   │   │   ├── open-order-analyzer.js
+│   │   │   ├── formatters/
+│   │   │   │   └── build-open-orders-analyzer.js
+│   │   │   └── prompts/
+│   │   │       ├── confidence-threshold.js
+│   │   │       ├── trading-system-prompt.js
+│   │   │       └── open-orders-system-prompt.js
+│   │   │
+│   │   ├── entities/
+│   │   │   ├── coins.js
+│   │   │   └── models.js
+│   │   │
+│   │   ├── job/
+│   │   │   └── client-agent-main.js
+│   │   │
+│   │   ├── services/
+│   │   │   ├── clientAgent.js
+│   │   │   ├── fallback-chain.js
+│   │   │   └── functions/
+│   │   │       └── json-parser.js
+│   │   │
+│   │   └── workflow/
+│   │       ├── available-balance.js
+│   │       ├── context-builder.js
+│   │       ├── decision-engine.js
+│   │       ├── market-fetch.js
+│   │       ├── open-orders-manager.js
+│   │       ├── order-executor.js
+│   │       └── portfolio-guard.js
+│   │
+│   ├── config/
+│   │   └── config.js
+│   │
+│   ├── revolut/
+│   │   ├── client.js
+│   │   ├── market.js
+│   │   └── orders.js
+│   │
+│   ├── services/
+│   │   └── mongo/
+│   │       ├── client.js
+│   │       └── mongo-service.js
+│   │
+│   ├── telegram/
+│   │   ├── admin/
+│   │   │   ├── admin-handlers.js
+│   │   │   └── fallback-chain-handler.js
+│   │   ├── entities/
+│   │   │   └── cronPresets.js
+│   │   ├── response/
+│   │   │   └── callback-handler.js
+│   │   ├── commands.js
+│   │   ├── handles.js
+│   │   ├── telegram.js
+│   │   ├── telegram-handlers.js
+│   │   └── utils.js
+│   │
+│   ├── users/
+│   │   ├── onboarding-wizard.js
+│   │   ├── user-config.js
+│   │   ├── user-registry.js
+│   │   └── user-session.js
+│   │
+│   └── utils/
+│       ├── cron-formatter.js
+│       ├── formatter.js
+│       └── logger.js
+│
+├── scripts/
+│   ├── generate-keys.js
+│   └── setup-admin.js
+│
+├── scratch/
+│   └── check-syntax.js
+│
+├── SETUP_GUIDE.md
+├── USAGE_GUIDE.md
+├── Dockerfile
+├── docker-compose.yml
+└── .env
+```
+
 ## Technical Indicators — What they are and why
 
 ### RSI — Relative Strength Index (period 14)
 
 Measures how fast and how much price has moved recently, normalized to 0–100. Values below 30 suggest the asset is oversold (potentially due for a bounce), above 70 suggest overbought (potentially due for a pullback).
 
-The agent uses RSI in two ways: as a raw value can reason about, and as a derived signal (`RSI_OVERSOLD`, `RSI_OVERBOUGHT`, `RSI_BEARISH_ZONE`, `RSI_BULLISH_ZONE`) that feeds the confluence score.
+The agent uses RSI in two ways: as a raw value can reason about, and as a derived signal `RSI_OVERSOLD, RSI_OVERBOUGHT, RSI_BEARISH_ZONE, RSI_BULLISH_ZONE` that feeds the confluence score.
 
 ### MACD — Moving Average Convergence Divergence (12, 26, 9)
 
 The MACD line is the difference between EMA(12) and EMA(26). The signal line is EMA(9) of the MACD line. The histogram is the difference between both. When the MACD crosses above the signal line, it indicates building momentum to the upside; the opposite signals weakening.
 
-The agent sends three values: `macdLine`, `macdSignal`, `macdHistogram`. It also derives `MACD_BULLISH_CROSS` / `MACD_BEARISH_CROSS` and `MACD_MOMENTUM_INCREASING` / `MACD_MOMENTUM_DECREASING` by comparing the current histogram to the previous one.
+The agent sends three values: `macdLine, macdSignal, macdHistogram, MACD_BULLISH_CROSS, MACD_BEARISH_CROSS, MACD_MOMENTUM_INCREASING, MACD_MOMENTUM_DECREASING` by comparing the current histogram to the previous one.
 
 ### Bollinger Bands (period 20, 2 standard deviations)
 
-Three lines: a 20-period SMA in the middle, and upper/lower bands at ±2σ. When price touches or breaks the lower band, it is statistically far from the mean (potential reversal zone). When bands narrow, volatility is contracting; when they expand, a breakout is likely.
+Used to detect volatility, mean reversion and breakout zones.
 
-The agent sends `bbUpper`, `bbMiddle`, `bbLower`, `bbWidth` (band width as % of middle), and `bbPosition` — a 0–100% value expressing where price sits within the bands. This last value is particularly useful for Agent as it is intuitive and scale-independent.
+The agent receives: `bbUpper,bbMiddle, bbLower, bbWidth bbPosition`
 
 ### EMA(12) / EMA(26) — Exponential Moving Averages
 
-EMAs weight recent prices more heavily than older ones. The relationship between EMA(12) and EMA(26) reveals trend direction: EMA(12) > EMA(26) is a golden cross (bullish), EMA(12) < EMA(26) is a death cross (bearish). These are derived as signals that also feed the confluence score.
+Used to detect short-term trend.
 
-### SMA(20)
+Typical interpretation:
 
-A simple 20-period moving average included as a reference for mean price. Sent to AI but not used in the automated confluence scoring.
+```
+EMA 12 above EMA 26: bullish structure
+EMA 12 below EMA 26: bearish structure
+```
+
+### ATR
+
+Used to estimate volatility.
+
+The bot also derives:
+ATR as percentage of price
+Volatility regime: low, medium or high
+Move significance: small, normal or large
 
 ### Confluence score — the pre-computed summary
 
-Rather than having Agent AI infer a sentiment entirely on its own from raw numbers, the system pre-computes a `confluence` object with explicit bullish/bearish signal lists and a `suggestion` field (`BUY_SIGNAL`, `SELL_SIGNAL`, `NEUTRAL`).
+The bot pre-computes a deterministic confluence summary.
 
 ```js
-// Signals that contribute to bullishCount:
-(RSI_oversold,
-  MACD_bullish_histogram,
-  MACD_bullish_cross,
-  EMA_golden_cross,
-  BB_oversold_zone,
-  BB_price_below_lower);
-
-// Signals that contribute to bearishCount:
-(RSI_overbought,
-  MACD_bearish_histogram,
-  MACD_bearish_cross,
-  EMA_death_cross,
-  BB_overbought_zone,
-  BB_price_above_upper);
-
-// suggestion = BUY_SIGNAL if bullishCount >= 2 AND bullishCount > bearishCount
-//            = SELL_SIGNAL if bearishCount >= 2 AND bearishCount > bearishCount
-//            = NEUTRAL otherwise
+{
+  "bullishCount": 3,
+  "bearishCount": 1,
+  "bullishSignals": [
+    "MACD_bullish_histogram",
+    "MACD_bullish_cross",
+    "EMA_golden_cross"
+  ],
+  "bearishSignals": [
+    "RSI_overbought"
+  ],
+  "suggestion": "BUY_SIGNAL"
+}
 ```
 
-The system prompt instructs Agent AI to use the confluence suggestion as a _foundation_ but apply its own judgment to the final action and confidence — avoiding over-reliance on a single pre-computed label while still providing deterministic signal structure.
+model uses this as a base, but it is not forced to follow it blindly.
 
 ---
 
@@ -177,90 +546,119 @@ Every cycle Agent AI receives a single JSON message containing:
 
 ```jsonc
 {
-  "timestamp": "2025-04-22T10:00:00Z",
-
-  // Portfolio state (with 1% safety buffer applied)
-  "balances": {
-    "fiat": { "USD": 487.50 },
-    "crypto": { "BTC": { "amount": 0.00185, "estimatedUsdValue": 152.20 } },
-    "summary": { "totalPortfolioUSD": 639.70, "availableForTrading": 487.50 }
+  "exchangeTruth": {
+    "balances": {
+      "fiat": {
+        "USD": 90.6,
+      },
+      "crypto": {},
+      "summary": {
+        "totalUSD": 90.6,
+        "totalCryptoUSD": 0,
+        "totalPortfolioUSD": 90.6,
+        "availableForTrading": 90.6,
+        "cashPercentage": 100,
+        "cryptoPercentage": 0,
+      },
+    },
+    "openOrders": [],
+    "marketBySymbol": {
+      "BTC-USD": {
+        "ticker": {
+          "bid": 76888.05,
+          "ask": 76898.24,
+          "mid": 76893.14,
+          "last": 76872.91,
+        },
+        "currentPrice": 76872.91,
+        "orderBookTop": {
+          "bestBid": {},
+          "bestAsk": {},
+        },
+      },
+    },
   },
-
-  // Open limit orders currently on the exchange
-  "openOrders": [],
-
-  // Per-pair market snapshot
-  "marketData": [{
-    "symbol": "BTC-USD",
-    "ticker": { "bid": 81200, "ask": 81250, "mid": 81225, "last": 81240 },
-    "orderBookTop": { "bestBid": {...}, "bestAsk": {...}, "bidDepth": 10, "askDepth": 10 },
-    "recentClosesContext": {
-      "timeframeMinutes": 60,
-      "allCandles": { "count": 200, "totalChangePct": 3.2, "durationRange": "8.3 días" },
-      "last30": {
-        "totalChangePct": 1.1,
-        "durationRange": "30.0 horas",
-        "changesPercent": [0, 0.12, -0.08, ...],   // candle-by-candle % changes
-        "volatilityATR": 312.4,                      // Average True Range
-        "recentVolumes": [12.4, 9.8, 11.2, 10.5, 13.1],
-        "avgVolume5": 11.4
-      }
-    }
-  }],
-
-  // Full computed indicators
-  "indicators": {
-    "BTC-USD": {
-      "currentPrice": 81240,
-      "rsi14": "58.34",
-      "sma20": "80100.00",
-      "ema12": "81050.00",
-      "ema26": "80200.00",
-      "macdLine": "850.0000",
-      "macdSignal": "720.0000",
-      "macdHistogram": "130.0000",
-      "bbUpper": "83500.00",
-      "bbMiddle": "80100.00",
-      "bbLower": "76700.00",
-      "bbWidth": "8.48%",
-      "bbPosition": "67.4%",
-      "signals": ["RSI_BULLISH_ZONE", "MACD_BULLISH_CROSS", "MACD_MOMENTUM_INCREASING", "EMA_GOLDEN_CROSS"],
-      "confluence": {
-        "bullishCount": 3,
-        "bearishCount": 0,
-        "bullishSignals": ["MACD_bullish_histogram", "MACD_bullish_cross", "EMA_golden_cross"],
-        "bearishSignals": [],
-        "suggestion": "BUY_SIGNAL"
-      }
-    }
+  "botState": {
+    "openLots": [],
+    "recentSells": [],
+    "lastExecutedOrder": null,
+    "rendimiento": null,
+    "rendimientoAcumulado": 0,
+    "tradingStats": {
+      "totalDecisions": 62,
+      "totalOrders": 3,
+      "totalBuys": 2,
+      "totalSells": 1,
+      "executionRate": "4.8%",
+      "totalRealizedPnL": 0.92,
+      "roiRealized": "0.50%",
+      "winningTrades": 1,
+      "losingTrades": 0,
+      "closedTrades": 1,
+      "winRate": "100.0%",
+      "openPositions": [],
+    },
+    "managedPositions": [],
   },
-
-  // Last 3 decisions for this symbol (avoids flip-flopping)
-  "previousDecisions": {
-    "BTC-USD": [
-      { "timestamp": "...", "action": "BUY", "confidence": 72, "reasoning": "..." }
-    ]
+  "decisionContext": {
+    "indicators": {
+      "BTC-USD": {
+        "currentPrice": 76872.91,
+        "rsi14": 52.1,
+        "ema12": 76920,
+        "ema26": 77010,
+        "macdHistogram": -15.2,
+        "bbPosition": "45.3%",
+        "confluence": {
+          "suggestion": "NEUTRAL",
+        },
+      },
+    },
+    "regimeSummary": {
+      "BTC-USD": {
+        "trend_regime": "neutral",
+        "momentum_regime": "mixed",
+        "volatility_regime": "low",
+        "market_structure": "range",
+        "signal_quality": "mixed",
+      },
+    },
+    "atrContext": {
+      "BTC-USD": {
+        "atr_value": 312.4,
+        "atr_pct_of_price": 0.406,
+        "volatility_regime": "low",
+        "move_significance": "normal",
+      },
+    },
+    "recentMarketContext": {
+      "BTC-USD": {
+        "timeframeMinutes": 60,
+        "allCandles": {
+          "count": 200,
+          "totalChangePct": 3.2,
+          "durationRange": "8.3 días",
+        },
+        "last30": {
+          "totalChangePct": 1.1,
+          "durationRange": "30.0 horas",
+          "changesPercent": [0, 0.12, -0.08],
+          "volatilityATR": 312.4,
+          "recentVolumes": [12.4, 9.8, 11.2],
+          "avgVolume5": 11,
+        },
+      },
+    },
+    "previousDecisions": {},
+    "priceChangeSinceLastAnalysisPct": 0,
   },
-
-  // FIFO open buy lots (real position state)
-  "openLots": [
-    { "price": 79500, "remaining_qty": 0.00185, "remaining_cost_usd": 147.08, "created_at": "..." }
-  ],
-
-  // Recent sells to provide exit context
-  "recentSells": [],
-
-  // Weighted unrealized P&L across all open lots
-  "rendimiento": 2.19,
-
-  // Hard constraints
   "constraints": {
-    "MAX_TRADE_SIZE": 25,
+    "MAX_TRADE_SIZE": 10,
     "MIN_ORDER": 50,
     "DRY_RUN": false,
-    "TAKE_PROFIT_PCT": 5,
-    "STOP_LOSS_PCT": 3
-  }
+    "TAKE_PROFIT_PCT": 0,
+    "STOP_LOSS_PCT": 0,
+  },
 }
 ```
 
@@ -272,36 +670,9 @@ Every cycle Agent AI receives a single JSON message containing:
 
 The indicator set covers the three classic dimensions: **momentum** (RSI, MACD), **trend** (EMA cross), and **volatility/mean reversion** (Bollinger Bands). For an LLM-based agent this is a well-balanced combination because:
 
-- Each indicator measures something qualitatively different, so they are relatively uncorrelated
-- The confluence pre-computation gives Agent AI a structured signal to anchor reasoning, reducing the chance of hallucinated patterns
-- `bbPosition` (0–100% within the bands) is particularly well-suited for a language model — it is scale-independent, intuitive, and immediately actionable
-- Sending `macdHistogram` from both the current and previous candle (via `MACD_MOMENTUM_INCREASING/DECREASING`) adds directional momentum context that the raw MACD line alone doesn't provide
-- ATR is included as a volatility measure, which helps Agent AI decide whether to widen TP/SL in high-volatility conditions
-- The `changesPercent` array (candle-by-candle % changes for the last 30 candles) gives Agent AI a readable sequence of recent price action without sending raw OHLCV arrays, which would be expensive in tokens
-
-### What could be improved
-
-**No volume-weighted indicators.** Volume is sent (`recentVolumes`, `avgVolume5`) but not processed into anything like VWAP or On-Balance Volume. A strong MACD signal with declining volume is a warning sign that the system currently leaves for Agent AI to infer implicitly.
-
-**RSI thresholds are fixed.** The confluence logic triggers at RSI < 35 for oversold and > 65 for overbought. In strongly trending markets, RSI can stay in overbought territory for extended periods without a reversal. A dynamic threshold (e.g., based on the RSI's own recent range) would reduce false signals.
-
-**No higher timeframe context.** The agent analyzes a single timeframe defined by `INDICATORS_CANDLES_INTERVAL`. A practical improvement would be to send a second set of indicators for a higher timeframe (e.g., if the user uses 15-min candles, also send 4-hour indicators) so Agent AI can align short-term entries with the macro trend.
-
-**SMA(20) is redundant alongside BB middle.** Since Bollinger Bands use SMA(20) as the middle band, both `sma20` and `bbMiddle` carry identical information. One of them can be removed to reduce token consumption.
-
-**Confluence scoring is binary per signal.** Each signal contributes exactly 1 to the count regardless of magnitude. RSI at 25 (deep oversold) and RSI at 34 (barely oversold) both add 1 bullish point. Weighted scoring — where extreme RSI values contribute more — would give the confluence a more accurate picture of signal strength.
-
 ### How the context is passed to Agent AI
 
 The design choice to **pre-process** market data before sending it to Agent AI is correct and important. Sending raw OHLCV arrays would consume tokens with redundant information and make the prompt brittle. The current approach sends:
-
-- Processed scalar indicators (not time series)
-- Pre-derived signal labels (not just raw numbers)
-- A pre-computed confluence summary with an explicit `suggestion`
-- Scale-independent derived metrics (`bbPosition`, `bbWidth`, `changesPercent`)
-- Human-readable duration strings (`"30.0 horas"`, `"8.3 días"`)
-
-This reduces the cognitive burden on Agent AI and keeps the prompt compact. The system prompt then instructs Agent AI to use the `suggestion` as a _foundation_ while applying its own judgment — a good balance between deterministic guardrails and LLM flexibility. Requiring strict JSON output and doing a robust fallback parse (`parseAgentAIJsonResponse`) is the right approach for production reliability.
 
 ---
 
@@ -337,29 +708,14 @@ This makes the system resilient to NTP drift on the host without any manual inte
 
 ### Order types and API quirks
 
+```
 | Order type | `order_configuration` key | Size field                         |
 | ---------- | ------------------------- | ---------------------------------- |
 | Market     | `market`                  | `quote_size` (USD amount)          |
 | Limit      | `limit`                   | `base_size` (crypto qty) + `price` |
-
-Both `client_order_id` (UUID v4) and symbol format (`BTC-USD`, not `BTC/USD`) are strict requirements. The `OrderManager` handles both automatically.
+```
 
 ---
-
-## FIFO Position Tracking
-
-Open positions are tracked in an `open_lots` collection rather than inferred from order history at query time. When a BUY executes, a lot record is inserted with `lot_status: 'open'`. When a SELL executes, `applySellToOpenLots()` consumes lots in chronological order (oldest first), computing realized P&L per lot and updating `remaining_qty`.
-
-This gives Agent AI accurate position context on every cycle:
-
-```js
-openLots: [
-  { price: 79500, remaining_qty: 0.00185, remaining_cost_usd: 147.08 },
-  { price: 81000, remaining_qty: 0.0006, remaining_cost_usd: 48.6 },
-];
-// → avgEntryPrice = (147.08 + 48.60) / (0.00185 + 0.00060) = 79,869
-// → rendimiento   = (currentPrice - avgEntryPrice) / avgEntryPrice × 100
-```
 
 This weighted average approach means Agent AI sees a realistic cost basis even after multiple partial buys at different prices — not just the last order price.
 
@@ -427,6 +783,7 @@ tradeAgent/
 
 ## Tech Stack
 
+```
 | Layer          | Technology                                     |
 | -------------- | ---------------------------------------------- |
 | Runtime        | Node.js ≥ 20 (ESM)                             |
@@ -438,32 +795,6 @@ tradeAgent/
 | Indicators     | `technicalindicators` (RSI, MACD, BB, EMA/SMA) |
 | Scheduling     | `node-cron`                                    |
 | Infrastructure | Docker + Docker Compose                        |
-
----
-
-## Environment Variables
-
-Infrastructure-level only. Per-user trading credentials are stored in MongoDB and configured via Telegram.
-
-```dotenv
-# ── Telegram ─────────────────────────────────────
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_BOT_USERNAME=
-ADMIN_TELEGRAM_ID=          # Your Telegram ID
-
-# ── MongoDB ──────────────────────────────────────
-MONGODB_URI=mongodb://admin:pass@mongodb:27017/trading_db?authSource=admin
-MONGODB_DB=revolut-trading-agent
-MONGO_ROOT_USERNAME=admin
-MONGO_ROOT_PASSWORD=
-
-# ── Admin fallback (optional) ────────────────────
-REVOLUT_API_KEY=
-REVOLUT_BASE_URL=https://revx.revolut.com
-REVOLUT_PRIVATE_KEY_PATH=./keys/private.pem
-ANTHROPIC_API_KEY=
-ANTHROPIC_MODEL=claude-haiku-4-5
-TRADING_PAIRS=BTC-USD
 ```
 
 ---
@@ -483,7 +814,112 @@ docker-compose logs -f trading-agent    # Follow logs
 docker-compose down                     # Stop (data preserved)
 ```
 
+## User onboarding
+
+Users configure their account from Telegram.
+
+The onboarding wizard asks for:
+
+1. Revolut X API key
+2. Revolut X private Ed25519 key
+3. AI provider API key
+4. Trading pairs
+
+```
+BTC-USD,ETH-USD,SOL-USD
+```
+
 ---
+
+## Strategy configuration
+
+```
+| Key                           | Meaning                                       |
+| ----------------------------- | --------------------------------------------- |
+| `TRADING_PAIRS`               | Symbols the agent can trade                   |
+| `MAX_TRADE_SIZE`              | Max percentage of available balance per trade |
+| `MIN_ORDER`                   | Minimum USD order size                        |
+| `TAKE_PROFIT_PCT`             | Forced take-profit percentage                 |
+| `STOP_LOSS_PCT`               | Forced stop-loss percentage                   |
+| `VISION_AGENT`                | Agent trading horizon                         |
+| `PERSONALITY_AGENT`           | Agent risk profile                            |
+| `INDICATORS_CANDLES_INTERVAL` | Candle timeframe in minutes                   |
+```
+
+## Agent personality
+
+```
+Conservative
+- Higher confidence required
+- Smaller positions
+- More likely to hold
+- Better for low-risk use
+```
+
+```
+Moderate
+- Balanced behaviour
+- Default option
+- Good for swing trading and general use
+```
+
+```
+Aggressive
+- Lower confidence threshold
+- More willing to enter
+- Higher risk
+```
+
+## Agent vision
+
+```
+short
+INDICATORS_CANDLES_INTERVAL=5
+CRON_SCHEDULE=*/15 * * * *
+```
+
+```
+medium
+INDICATORS_CANDLES_INTERVAL=60
+CRON_SCHEDULE=0 */2 * * *
+```
+
+```
+long
+INDICATORS_CANDLES_INTERVAL=720
+CRON_SCHEDULE=0 */12 * * *
+```
+
+### Recommended safe start
+
+```
+TRADING_PAIRS=BTC-USD
+MAX_TRADE_SIZE=10
+MIN_ORDER=50
+TAKE_PROFIT_PCT=3
+STOP_LOSS_PCT=2
+PERSONALITY_AGENT=moderate
+VISION_AGENT=medium
+INDICATORS_CANDLES_INTERVAL=60
+CRON_SCHEDULE=2hour
+CRON_ENABLED=true
+
+```
+
+## Known limitations
+
+This project is not a guaranteed profitable system.
+
+- No true market depth strategy
+- No professional backtesting engine
+- No portfolio optimization model
+- No guaranteed slippage control
+- No tax reporting
+- No advanced risk engine by volatility-adjusted position sizing
+- AI output can still be wrong
+- Technical indicators can fail in news-driven markets
+- Revolut X API availability can affect execution
+- Crypto markets are highly volatile
 
 ## License
 
