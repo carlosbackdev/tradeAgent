@@ -479,10 +479,8 @@ export function computeCrossTfConfluence(baseTfIndicators, higherTfIndicators) {
     score,
     gate,
     entryMode,
-    entryMode,
     signals,
     conflicts,
-    reason,
     reason,
   };
 }
