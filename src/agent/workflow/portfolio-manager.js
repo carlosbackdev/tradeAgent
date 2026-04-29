@@ -21,6 +21,24 @@ const RISK_FACTOR_LABELS = {
   high_crypto_exposure: 'exposicion crypto alta'
 };
 
+function getLastBuyAgeMinutes(positionSummary, previousDecisionsBySymbol, symbol) {
+  if (positionSummary?.openLots?.length > 0) {
+    const sortedLots = [...positionSummary.openLots].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const lastLot = sortedLots[0];
+    if (lastLot?.created_at) {
+      return (Date.now() - new Date(lastLot.created_at).getTime()) / 60000;
+    }
+  }
+
+  const history = previousDecisionsBySymbol?.[symbol] || [];
+  const lastBuy = history.find((d) => String(d.action || '').toUpperCase() === 'BUY');
+  if (lastBuy?.timestamp) {
+    return (Date.now() - new Date(lastBuy.timestamp).getTime()) / 60000;
+  }
+
+  return null;
+}
+
 export function applyPortfolioManagerDecision({
   decision,
   symbol,
@@ -110,6 +128,14 @@ export function applyPortfolioManagerDecision({
     higherTfSell: riskFacts.higherTfSell
   };
 
+  const stopLossPct = Number(config?.trading?.stopLossPct || 2.5);
+  const minHoldMinutes = Number(config?.trading?.minHoldMinutesAfterBuy || 240);
+  const ageMinutes = getLastBuyAgeMinutes(positionSummary, analyzerContext?.previousDecisions, normalizedSymbol);
+  const isRecentBuy = ageMinutes !== null && ageMinutes < minHoldMinutes;
+
+  contextFacts.isRecentBuy = isRecentBuy;
+  contextFacts.ageMinutes = ageMinutes;
+
   if (decisionAction === 'BUY' && recentBuyCooldownActive) {
     return annotateDecision(buildHoldOverride(decision, {
       summary: 'HOLD por cooldown tras BUY reciente',
@@ -154,7 +180,8 @@ export function applyPortfolioManagerDecision({
     riskFacts,
     currentRoi,
     maxRoiSeen,
-    lifecyclePhase
+    lifecyclePhase,
+    isRecentBuy
   });
 
   if ((cooldownActive || recentDefensiveSell) && !isExceptionalSellDuringCooldown(contextFacts, riskFacts)) {
@@ -164,8 +191,33 @@ export function applyPortfolioManagerDecision({
     }), contextFacts);
   }
 
-  if (decisionAction === 'SELL' && defensiveCandidate) {
-    if (riskFacts.strongInvalidation && decisionPct < 80) {
+  if (decisionAction === 'SELL') {
+    if (isRecentBuy) {
+      if (!defensiveCandidate || defensiveCandidate.defensiveReason !== 'EXTREME_INVALIDATION') {
+        logger.info(`SELL blocked: recently bought ${Math.round(ageMinutes)}min ago, minHold=${minHoldMinutes}, roi=${currentRoi}, stopLoss=${stopLossPct}`);
+        return annotateDecision(buildHoldOverride(decision, {
+          summary: 'HOLD: venta bloqueada por maduracion',
+          reasoning: `HOLD: se evita una venta impulsiva. Comprado hace ${Math.round(ageMinutes)}min (minHold=${minHoldMinutes}min). ROI: ${currentRoi}%, no alcanza stop loss ni invalidacion extrema.`
+        }), contextFacts);
+      } else {
+        logger.info(`SELL allowed: extreme invalidation (age: ${Math.round(ageMinutes)}min)`);
+      }
+    }
+
+    if (currentRoi <= 0 && currentRoi > -1.8 && !riskFacts.strongInvalidation) {
+      if (!defensiveCandidate) {
+        logger.info(`SELL blocked: small drawdown ${currentRoi}% without strong deterioration`);
+        return annotateDecision(buildHoldOverride(decision, {
+          summary: 'HOLD: venta rechazada por drawdown pequeno sin deterioro fuerte',
+          reasoning: `HOLD: el ROI es ${currentRoi}%, no hay suficientes factores de riesgo para justificar una venta parcial o total.`
+        }), contextFacts);
+      } else if (decisionPct > defensiveCandidate.positionPctMax) {
+        const capped = buildDefensiveSell(decision, defensiveCandidate, contextFacts, { minPct: defensiveCandidate.positionPctMin, maxPct: defensiveCandidate.positionPctMax });
+        return annotateDecision(capped, contextFacts);
+      }
+    }
+
+    if (defensiveCandidate && riskFacts.strongInvalidation && decisionPct < 80) {
       const upgraded = buildDefensiveSell(decision, defensiveCandidate, contextFacts, {
         minPct: 80,
         maxPct: 100
@@ -173,10 +225,8 @@ export function applyPortfolioManagerDecision({
       return annotateDecision(upgraded, contextFacts);
     }
 
-    if (decisionConfidence >= defensiveCandidate.confidenceMin) {
-      const normalizedExistingSell = normalizeSellForDust(decision, contextFacts);
-      return annotateDecision(normalizedExistingSell, contextFacts);
-    }
+    const normalizedExistingSell = normalizeSellForDust(decision, contextFacts);
+    return annotateDecision(normalizedExistingSell, contextFacts);
   }
 
   if (defensiveCandidate) {
@@ -196,11 +246,6 @@ export function applyPortfolioManagerDecision({
       summary: 'HOLD: BUY bloqueado por riesgo elevado',
       reasoning: buildHoldRiskReasoning(contextFacts)
     }), contextFacts);
-  }
-
-  if (decisionAction === 'SELL') {
-    const normalizedExistingSell = normalizeSellForDust(decision, contextFacts);
-    return annotateDecision(normalizedExistingSell, contextFacts);
   }
 
   return annotateDecision(decision, contextFacts);
@@ -256,6 +301,7 @@ function buildRiskFactors({ crossTf, higherTf, indicators, priceNarrative, crypt
   return {
     list,
     higherTfSell,
+    baseTfSell: baseTfSellSignal,
     crossTfConflict,
     priceBelowEma12,
     macdWeak,
@@ -266,7 +312,21 @@ function buildRiskFactors({ crossTf, higherTf, indicators, priceNarrative, crypt
   };
 }
 
-function getDefensiveSellCandidate({ riskFacts, currentRoi, maxRoiSeen, lifecyclePhase }) {
+function getDefensiveSellCandidate({ riskFacts, currentRoi, maxRoiSeen, lifecyclePhase, isRecentBuy }) {
+  if (isRecentBuy) {
+    if (currentRoi <= -1.5 && riskFacts.list.length >= 5 && riskFacts.higherTfSell && riskFacts.baseTfSell) {
+      return {
+        positionPctMin: 80,
+        positionPctMax: 100,
+        confidenceMin: 78,
+        confidenceMax: 88,
+        defensiveReason: 'EXTREME_INVALIDATION',
+        lifecyclePhase: 'THESIS_INVALIDATION'
+      };
+    }
+    return null;
+  }
+
   if (riskFacts.strongInvalidation) {
     return {
       positionPctMin: 80,
@@ -311,15 +371,30 @@ function getDefensiveSellCandidate({ riskFacts, currentRoi, maxRoiSeen, lifecycl
     };
   }
 
-  if (currentRoi > -1.8 && currentRoi < 0.5 && riskFacts.list.length >= 3) {
-    return {
-      positionPctMin: 30,
-      positionPctMax: 50,
-      confidenceMin: 62,
-      confidenceMax: 72,
-      defensiveReason: 'PRE_STOP_LOSS_RISK_REDUCTION',
-      lifecyclePhase: lifecyclePhase || 'IN_DRAWDOWN'
-    };
+  if (currentRoi <= 0 && currentRoi > -1.0) {
+    if (riskFacts.list.length >= 4 && riskFacts.baseTfSell) {
+      return {
+        positionPctMin: 20,
+        positionPctMax: 35,
+        confidenceMin: 68,
+        confidenceMax: 78,
+        defensiveReason: 'EARLY_DRAWDOWN_REDUCTION',
+        lifecyclePhase: 'IN_DRAWDOWN'
+      };
+    }
+  }
+
+  if (currentRoi <= -1.0 && currentRoi > -1.8) {
+    if (riskFacts.list.length >= 3) {
+      return {
+        positionPctMin: 25,
+        positionPctMax: 50,
+        confidenceMin: 65,
+        confidenceMax: 75,
+        defensiveReason: 'PRE_STOP_LOSS_RISK_REDUCTION',
+        lifecyclePhase: 'IN_DRAWDOWN'
+      };
+    }
   }
 
   return null;
@@ -377,10 +452,12 @@ function normalizeSellForDust(decision, contextFacts) {
 function buildDefensiveReasoning(decision, contextFacts) {
   const reasonCode = String(decision.defensiveReason || '').toUpperCase();
   const reasonTitle = {
+    EXTREME_INVALIDATION: 'invalidacion extrema',
     THESIS_INVALIDATION: 'invalidacion de tesis',
     PROFIT_TO_LOSS_PREVENTION: 'prevencion de paso de ganancia a perdida',
     PROFIT_RETRACEMENT: 'retraccion de beneficios',
     PROFIT_PROTECTION: 'proteccion de beneficios',
+    EARLY_DRAWDOWN_REDUCTION: 'reduccion de riesgo temprana',
     PRE_STOP_LOSS_RISK_REDUCTION: 'reduccion de riesgo previa a stop'
   }[reasonCode] || 'gestion defensiva de riesgo';
 
@@ -549,10 +626,12 @@ function buildSizingSentence(contextFacts, sellPct) {
 
 function buildDefensiveSummary(defensiveReason, pct) {
   const map = {
+    EXTREME_INVALIDATION: 'invalidacion extrema',
     THESIS_INVALIDATION: 'invalidacion de tesis',
     PROFIT_TO_LOSS_PREVENTION: 'evitar paso de ganancia a perdida',
     PROFIT_RETRACEMENT: 'retraccion de beneficios',
     PROFIT_PROTECTION: 'proteccion de beneficio',
+    EARLY_DRAWDOWN_REDUCTION: 'reduccion riesgo temprana',
     PRE_STOP_LOSS_RISK_REDUCTION: 'reduccion de riesgo pre stop'
   };
   const label = map[defensiveReason] || 'riesgo elevado';

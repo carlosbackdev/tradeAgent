@@ -1,8 +1,3 @@
-/**
- * revolut/orders.js
- * Place and manage orders on Revolut X.
- */
-
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger.js';
 import { config } from '../config/config.js';
@@ -17,7 +12,19 @@ export class OrderManager {
     return symbol.replace('/', '-');
   }
 
-  async placeOrder({ symbol, side, type, usdAmount, price, currentPrice, takeProfit, stopLoss }) {
+  _formatPrice(price) {
+    const num = Number(price);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    let originalDecimals = 0;
+    if (price.toString().includes('.')) {
+      originalDecimals = price.toString().split('.')[1].length;
+    }
+    if (num >= 1000) return num.toFixed(2);
+    if (num >= 1) return num.toFixed(Math.max(4, Math.min(originalDecimals, 8)));
+    return num.toFixed(Math.max(6, Math.min(originalDecimals, 8)));
+  }
+
+  async placeOrder({ symbol, side, type, usdAmount, baseAmount, price, currentPrice, takeProfit, stopLoss }) {
     if (!symbol || !side || !type || usdAmount === undefined || usdAmount === null) {
       throw new Error(`Missing order params: symbol=${symbol}, side=${side}, type=${type}, usdAmount=${usdAmount}`);
     }
@@ -33,29 +40,44 @@ export class OrderManager {
     let estimatedQty = null;
 
     if (type === 'market') {
-      // For market orders, estimate qty using currentPrice if available
       const priceForQty = currentPrice || price;
       if (priceForQty) {
         estimatedQty = (usd / Number(priceForQty)).toFixed(8);
       }
-      order_configuration = {
-        market: {
-          quote_size: usd.toFixed(2),
-        },
-      };
+      
+      if (side.toLowerCase() === 'sell' && baseAmount && Number(baseAmount) > 0) {
+        order_configuration = {
+          market: {
+            base_size: Number(baseAmount).toFixed(8)
+          }
+        };
+        estimatedQty = Number(baseAmount).toFixed(8);
+      } else {
+        order_configuration = {
+          market: {
+            quote_size: usd.toFixed(2),
+          },
+        };
+      }
     } else if (type === 'limit') {
-      const parsedPrice = Number(price);
-      if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      const formattedPrice = this._formatPrice(price);
+      if (!formattedPrice) {
         throw new Error(`Invalid limit price: ${price}`);
       }
 
-      const cryptoQty = (usd / parsedPrice).toFixed(8);
+      let cryptoQty;
+      if (side.toLowerCase() === 'sell' && baseAmount && Number(baseAmount) > 0) {
+        cryptoQty = Number(baseAmount).toFixed(8);
+      } else {
+        cryptoQty = (usd / Number(formattedPrice)).toFixed(8);
+      }
+      
       estimatedQty = cryptoQty;
 
       order_configuration = {
         limit: {
           base_size: cryptoQty,
-          price: parsedPrice.toFixed(2),
+          price: formattedPrice,
           execution_instructions: ['allow_taker'],
         },
       };

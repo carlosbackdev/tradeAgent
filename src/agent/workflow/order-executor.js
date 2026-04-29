@@ -101,7 +101,10 @@ export async function executeDecisions(
         }
 
         const qtyToSell = coinSellable * positionPctDecimal;
-        usd = qtyToSell * currentPrice;
+        const SELL_SIZE_BUFFER = 0.999;
+        const baseAmount = Math.floor(qtyToSell * SELL_SIZE_BUFFER * 100000000) / 100000000;
+        usd = baseAmount * currentPrice;
+        d.baseAmount = baseAmount;
 
         logger.info(
           `📐 SELL positionPct=${effectivePositionPct.toFixed(0)}% of sellable ${coinSellable.toFixed(6)} ${baseCurrency} → $${usd.toFixed(2)}`
@@ -127,7 +130,10 @@ export async function executeDecisions(
         const normalizedSymbol = d.symbol.replace('/', '-');
         const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
 
-        usd = parseFloat((coinSellable * currentPrice).toFixed(2));
+        const SELL_SIZE_BUFFER = 0.999;
+        const baseAmount = Math.floor(coinSellable * SELL_SIZE_BUFFER * 100000000) / 100000000;
+        usd = parseFloat((baseAmount * currentPrice).toFixed(2));
+        d.baseAmount = baseAmount;
 
         logger.info(
           `💱 SELL auto-fill (legacy sellable): ${coinSellable} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`
@@ -245,6 +251,7 @@ export async function executeDecisions(
         side: d.action.toLowerCase(),
         type: d.orderType ?? 'market',
         usdAmount: usd,
+        baseAmount: d.baseAmount,
         price: d.limitPrice,
         currentPrice: currentPrice,
         takeProfit: d.takeProfit,
