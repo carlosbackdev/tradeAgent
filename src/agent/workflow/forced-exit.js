@@ -17,7 +17,8 @@ export async function handleForcedExit(d, {
   client,
   indicators,
   balanceArray = [],
-  chatId
+  chatId,
+  config
 }) {
   const isForcedExit =
     d.forced === true ||
@@ -30,10 +31,10 @@ export async function handleForcedExit(d, {
   const normalizedSymbol = d.symbol.replace('/', '-');
   const baseCurrency = normalizedSymbol.split('-')[0];
   const currentPrice = Number(indicators?.[normalizedSymbol]?.currentPrice || d.price || 0);
+  const minForcedExitUsd = resolveMinForcedExitUsd(config);
 
-  logger.warn(`🚨 Handling forced ${d.forcedReason || 'EXIT'} for ${normalizedSymbol}`);
+  logger.warn(`Handling forced ${d.forcedReason || 'EXIT'} for ${normalizedSymbol}`);
 
-  // 1. Cancel open SELL orders for this symbol first.
   const cancelledSellOrders = await cancelOpenSellOrdersForSymbol({
     orders,
     symbol: normalizedSymbol,
@@ -41,7 +42,6 @@ export async function handleForcedExit(d, {
     reason: d.forcedReason || 'FORCED_EXIT'
   });
 
-  // 2. Refresh balances, but do not depend on client.getBalances().
   const availableBaseQty = await resolveAvailableBaseQty({
     client,
     balanceArray,
@@ -51,58 +51,47 @@ export async function handleForcedExit(d, {
     symbol: normalizedSymbol
   });
 
-  // 3. Get FIFO position quantity.
   const openPositionSummary = await getOpenPositionSummary(normalizedSymbol, currentPrice, chatId);
 
   const fifoQty = Number(
+    openPositionSummary?.totalOpenQty ??
     openPositionSummary?.totalQty ??
     openPositionSummary?.qty ??
     0
   );
 
   logger.warn(
-    `🧮 Forced ${d.forcedReason || 'EXIT'} ${normalizedSymbol} qty check: ` +
+    `Forced ${d.forcedReason || 'EXIT'} ${normalizedSymbol} qty check: ` +
     `availableBaseQty=${availableBaseQty}, fifoQty=${fifoQty}, openLots=${openPositionSummary?.openLots?.length || 0}`
   );
 
   if (openPositionSummary?.openLots?.length > 0) {
     for (const lot of openPositionSummary.openLots) {
       logger.info(
-        `📦 FIFO lot ${normalizedSymbol}: id=${lot._id}, remaining_qty=${lot.remaining_qty}, lot_status=${lot.lot_status}`
+        `FIFO lot ${normalizedSymbol}: id=${lot._id}, remaining_qty=${lot.remaining_qty}, lot_status=${lot.lot_status}`
       );
     }
   }
 
-  /**
-   * Normal safe case:
-   * Sell only the minimum between exchange available qty and FIFO qty.
-   */
   let qtyToSell = 0;
 
   if (availableBaseQty > 0 && fifoQty > 0) {
     qtyToSell = Math.min(availableBaseQty, fifoQty);
   }
 
-  /**
-   * Defensive forced STOP_LOSS fallback:
-   * If exchange says there is available balance but FIFO is 0,
-   * do not block emergency exit. Sell exchange balance defensively.
-   *
-   * This avoids being trapped because Mongo/FIFO is temporarily out of sync.
-   */
   if (qtyToSell <= 0 && d.forcedReason === 'STOP_LOSS' && availableBaseQty > 0) {
     qtyToSell = availableBaseQty;
     d.fifoMatched = false;
 
     logger.warn(
-      `⚠️ No FIFO qty found for ${normalizedSymbol}, but exchange available balance exists. ` +
+      `No FIFO qty found for ${normalizedSymbol}, but exchange available balance exists. ` +
       `Executing defensive STOP_LOSS with availableBaseQty=${availableBaseQty}`
     );
   }
 
   if (qtyToSell <= 0) {
     logger.warn(
-      `⚠️ Forced ${d.forcedReason || 'EXIT'} skipped for ${normalizedSymbol}: ` +
+      `Forced ${d.forcedReason || 'EXIT'} skipped for ${normalizedSymbol}: ` +
       `no available qty (${availableBaseQty}) or no FIFO position (${fifoQty})`
     );
 
@@ -113,17 +102,25 @@ export async function handleForcedExit(d, {
   }
 
   if (!currentPrice || currentPrice <= 0) {
-    logger.warn(`⚠️ Forced ${d.forcedReason || 'EXIT'} skipped for ${normalizedSymbol}: invalid current price ${currentPrice}`);
+    logger.warn(`Forced ${d.forcedReason || 'EXIT'} skipped for ${normalizedSymbol}: invalid current price ${currentPrice}`);
     return {
       shouldSkip: true,
       reason: `Invalid current price ${currentPrice}`
     };
   }
 
-  /**
-   * Your executor is using legacy usdAmount SELL mode.
-   * Keep usdAmount, but base it on corrected qty.
-   */
+  const estimatedUsd = qtyToSell * currentPrice;
+  if (estimatedUsd < minForcedExitUsd) {
+    logger.warn(
+      `Forced ${d.forcedReason || 'EXIT'} ignored as dust for ${normalizedSymbol}: ` +
+      `qty=${qtyToSell}, estUsd=$${estimatedUsd.toFixed(6)}, minForcedExitUsd=$${minForcedExitUsd}`
+    );
+    return {
+      shouldSkip: true,
+      reason: `Forced exit ignored as dust (<$${minForcedExitUsd})`
+    };
+  }
+
   const refreshedUsdAmount = qtyToSell * currentPrice * 0.999;
 
   d.usdAmount = Number(refreshedUsdAmount.toFixed(2));
@@ -132,11 +129,17 @@ export async function handleForcedExit(d, {
   d.orderType = d.orderType || 'market';
 
   logger.warn(
-    `🔴 Forced ${d.forcedReason || 'EXIT'} executing ${normalizedSymbol}: ` +
+    `Forced ${d.forcedReason || 'EXIT'} executing ${normalizedSymbol}: ` +
     `qty=${d.qty}, usdAmount=$${d.usdAmount}, price=${currentPrice}`
   );
 
   return { shouldSkip: false };
+}
+
+function resolveMinForcedExitUsd(config) {
+  const n = Number(config?.trading?.forcedExitMinUsd ?? config?.trading?.dustIgnoreUsd ?? 0.1);
+  if (!Number.isFinite(n) || n <= 0) return 0.1;
+  return n;
 }
 
 /**
@@ -151,7 +154,6 @@ async function resolveAvailableBaseQty({
   openOrders = [],
   symbol
 }) {
-  // 1. Try known possible client methods safely.
   const refreshCandidates = [
     'getBalances',
     'getBalance',
@@ -172,18 +174,14 @@ async function resolveAvailableBaseQty({
       const available = Number(baseBal?.available ?? baseBal?.total ?? baseBal?.amount ?? 0);
 
       if (Number.isFinite(available) && available > 0) {
-        logger.info(`🔄 Refreshed ${baseCurrency} balance via ${methodName}: ${available}`);
+        logger.info(`Refreshed ${baseCurrency} balance via ${methodName}: ${available}`);
         return available;
       }
     } catch (err) {
-      logger.warn(`⚠️ Failed refreshing balances via ${methodName}: ${err.message}`);
+      logger.warn(`Failed refreshing balances via ${methodName}: ${err.message}`);
     }
   }
 
-  /**
-   * 2. Fallback to last known balanceArray.
-   * Prefer available, but after cancelling SELL orders total can be safer if available is stale.
-   */
   const baseBal = (balanceArray || []).find((b) => String(b.currency).toUpperCase() === baseCurrency);
 
   let fallbackQty = Number(baseBal?.available ?? 0);
@@ -192,10 +190,6 @@ async function resolveAvailableBaseQty({
     fallbackQty = Number(baseBal?.total ?? baseBal?.amount ?? 0);
   }
 
-  /**
-   * 3. If we cancelled SELL orders, old available might still be stale.
-   * Estimate released quantity from cancelled open SELL orders for same symbol.
-   */
   if (cancelledSellOrders.length > 0) {
     const normalizedSymbol = symbol.replace('/', '-');
 
@@ -215,11 +209,11 @@ async function resolveAvailableBaseQty({
 
     if (releasedQty > 0) {
       fallbackQty = Math.max(fallbackQty, releasedQty);
-      logger.warn(`🔄 Estimated released ${baseCurrency} qty from cancelled SELL orders: ${releasedQty}`);
+      logger.warn(`Estimated released ${baseCurrency} qty from cancelled SELL orders: ${releasedQty}`);
     }
   }
 
-  logger.warn(`⚠️ Using fallback ${baseCurrency} balance: ${fallbackQty}`);
+  logger.warn(`Using fallback ${baseCurrency} balance: ${fallbackQty}`);
 
   return Number.isFinite(fallbackQty) ? fallbackQty : 0;
 }
@@ -255,7 +249,7 @@ async function cancelOpenSellOrdersForSymbol({ orders, symbol, openOrders = [], 
   });
 
   if (sellOrders.length === 0) {
-    logger.info(`ℹ️ No open SELL orders to cancel for ${normalizedSymbol} before ${reason}`);
+    logger.info(`No open SELL orders to cancel for ${normalizedSymbol} before ${reason}`);
     return [];
   }
 
@@ -265,16 +259,16 @@ async function cancelOpenSellOrdersForSymbol({ orders, symbol, openOrders = [], 
     const orderId = order.id || order.orderId || order.revolut_order_id;
 
     if (!orderId) {
-      logger.warn(`⚠️ Cannot cancel SELL order for ${normalizedSymbol}: missing order id`);
+      logger.warn(`Cannot cancel SELL order for ${normalizedSymbol}: missing order id`);
       continue;
     }
 
     try {
       await orders.cancelOrder(orderId);
       cancelled.push(orderId);
-      logger.warn(`🧹 Cancelled open SELL order ${orderId} for ${normalizedSymbol} before ${reason}`);
+      logger.warn(`Cancelled open SELL order ${orderId} for ${normalizedSymbol} before ${reason}`);
     } catch (err) {
-      logger.warn(`⚠️ Failed to cancel SELL order ${orderId} for ${normalizedSymbol}: ${err.message}`);
+      logger.warn(`Failed to cancel SELL order ${orderId} for ${normalizedSymbol}: ${err.message}`);
     }
   }
 

@@ -1,162 +1,122 @@
 /**
  * workflow/order-executor.js
- * Executes decisions: validates, applies safety buffers, and places orders
+ * Executes validated decisions and sends prepared orders to Revolut.
  */
 
 import { OrderManager } from '../../revolut/orders.js';
 import { notifyOrderExecuted, notifyError } from '../../telegram/handles.js';
-import { saveOrder, applySellToOpenLots, markLifecycleAfterSell } from '../../services/mongo/mongo-service.js';
+import {
+  saveOrder,
+  applySellToOpenLots,
+  markLifecycleAfterSell,
+  getOpenPositionSummary,
+  updatePositionLifecycleState
+} from '../../services/mongo/mongo-service.js';
 import { logger } from '../../utils/logger.js';
-import { getAvailableUsdReal, getAvailableCoinReal } from './available-balance.js';
 import { getHoldConfidenceThreshold } from '../context/prompts/confidence-threshold.js';
 import { handleForcedExit } from './forced-exit.js';
+import { buildExecutableOrderSize } from './sizing/order-sizing.js';
+import { buildExecutionNotificationPayload } from './report/trading-report.js';
+import {
+  isBlockedHoldDecision,
+  isExchangeRejectionError,
+  notifyDefensiveSell,
+  notifyExchangeRejection,
+  notifyHoldBlocked
+} from './report/risk-alerts.js';
 
 export async function executeDecisions(
   decisions,
-  coin,
+  _coin,
   balanceArray,
   openOrders,
   realAvailableBalances,
   indicators,
   config,
-  rendimiento = null,
+  historicalRendimiento = null,
   dbConnected = false,
   chatId = null,
   managedPositions = []
 ) {
   const execResults = [];
-  let executedCount = 0, skippedCount = 0, errorCount = 0;
+  let executedCount = 0;
+  let skippedCount = 0;
+  let errorCount = 0;
 
   const holdThreshold = getHoldConfidenceThreshold(config.trading?.personalityAgent);
   const maxTradeSizePct = normalizeMaxTradeSizePct(config.trading?.maxTradeSize);
 
-  // Initialize OrderManager for placing orders
   const { RevolutClient } = await import('../../revolut/client.js');
   const client = new RevolutClient(config);
   const orders = new OrderManager(client);
 
   for (const d of decisions) {
-    if (!d.symbol) continue;
+    if (!d?.symbol) continue;
 
-    // ── Guards ────────────────────────────────────────────────
-    if (d.action === 'HOLD') {
-      execResults.push({ ...d, rendimiento, status: 'skipped', reason: 'HOLD decision' });
+    if (String(d.action).toUpperCase() === 'HOLD') {
+      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'skipped', reason: 'HOLD decision' });
+      if (isBlockedHoldDecision(d)) {
+        await notifyHoldBlocked(d, chatId).catch(() => { });
+      }
       skippedCount++;
       continue;
     }
 
-    if (d.confidence < holdThreshold) {
-      execResults.push({ ...d, rendimiento, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
+    if (Number(d.confidence || 0) < holdThreshold) {
+      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
       skippedCount++;
       continue;
     }
 
-    let usd = null;
-
-    const rawPositionPct = normalizeForAiPositionPct(d.positionPct ?? 0);
-
-    const maxPctForAction = d.action === 'SELL' ? 100 : maxTradeSizePct;
-    const effectivePositionPct = Number.isFinite(rawPositionPct) && rawPositionPct > 0
-      ? clamp(rawPositionPct, 0, maxPctForAction)
-      : 0;
-
-    const positionPctDecimal = effectivePositionPct / 100;
-
-    if (positionPctDecimal > 0) {
-      // ── positionPct mode ────────────────────────────────────
-      if (d.action === 'BUY') {
-        const usdBalance = Number(
-          realAvailableBalances?.availableByCurrency?.USD ??
-          getAvailableUsdReal(balanceArray, openOrders)
-        );
-
-        usd = usdBalance * positionPctDecimal;
-
-        logger.info(
-          `📐 BUY positionPct=${effectivePositionPct.toFixed(0)}% of $${usdBalance.toFixed(2)} USD → $${usd.toFixed(2)}`
-        );
-      }
-
-      if (d.action === 'SELL') {
-        const normalizedSymbol = d.symbol.replace('/', '-');
-        const baseCurrency = normalizedSymbol.split('-')[0];
-        const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-
-        // Option B: Sell ONLY based on bot-managed positions
-        const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
-        const coinManagedBalance = managedPos ? managedPos.qty : 0;
-
-        const coinAvailableReal = Number(
-          realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
-          getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol)
-        );
-
-        const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
-
-        if (currentPrice <= 0) {
-          execResults.push({ ...d, rendimiento, status: 'error', error: `No current price for ${d.symbol}` });
-          errorCount++;
-          logger.error(`❌ No current price for ${d.symbol}, skipping SELL`);
-          continue;
-        }
-
-        const qtyToSell = coinSellable * positionPctDecimal;
-        const SELL_SIZE_BUFFER = 0.999;
-        const baseAmount = Math.floor(qtyToSell * SELL_SIZE_BUFFER * 100000000) / 100000000;
-        usd = baseAmount * currentPrice;
-        d.baseAmount = baseAmount;
-
-        logger.info(
-          `📐 SELL positionPct=${effectivePositionPct.toFixed(0)}% of sellable ${coinSellable.toFixed(6)} ${baseCurrency} → $${usd.toFixed(2)}`
-        );
-      }
-    } else {
-      // ── Legacy usdAmount mode (backward compat) ────────────
-      usd = parseFloat(d.usdAmount);
-      logger.info(`💡 Legacy usdAmount mode: $${usd} for ${d.symbol}`);
-
-      // Legacy SELL auto-fill if amount is missing
-      if (d.action === 'SELL' && (isNaN(usd) || usd === 0)) {
-        const baseCurrency = d.symbol.split('-')[0];
-        const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
-        const coinManagedBalance = managedPos ? managedPos.qty : 0;
-
-        const coinAvailableReal = Number(
-          realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
-          getAvailableCoinReal(balanceArray, openOrders, d.symbol)
-        );
-
-        const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
-        const normalizedSymbol = d.symbol.replace('/', '-');
-        const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
-
-        const SELL_SIZE_BUFFER = 0.999;
-        const baseAmount = Math.floor(coinSellable * SELL_SIZE_BUFFER * 100000000) / 100000000;
-        usd = parseFloat((baseAmount * currentPrice).toFixed(2));
-        d.baseAmount = baseAmount;
-
-        logger.info(
-          `💱 SELL auto-fill (legacy sellable): ${coinSellable} ${baseCurrency} @ $${currentPrice} ≈ $${usd}`
-        );
-      }
+    let sizingPlan;
+    try {
+      sizingPlan = buildExecutableOrderSize({
+        decision: d,
+        balanceArray,
+        openOrders,
+        realAvailableBalances,
+        indicators,
+        managedPositions,
+        maxTradeSizePct
+      });
+    } catch (err) {
+      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'error', error: err.message });
+      errorCount++;
+      logger.error(`Order sizing failed for ${d.symbol}: ${err.message}`);
+      continue;
     }
 
-    // Store normalized decimal positionPct back on decision for auditing/persistence
-    d.positionPct = positionPctDecimal;
+    d.positionPct = Number(sizingPlan.positionPctDecimal || 0);
+    d.baseAmount = Number.isFinite(Number(sizingPlan.baseAmount)) && Number(sizingPlan.baseAmount) > 0
+      ? Number(sizingPlan.baseAmount)
+      : null;
+    d.usdAmount = Number(sizingPlan.usdAmount || 0);
 
-    usd = parseFloat((usd || 0).toFixed(2));
-    d.usdAmount = usd;
-
-    if (d.action === 'BUY') {
-      const usdAvailable = Number(
-        realAvailableBalances?.availableByCurrency?.USD ??
-        getAvailableUsdReal(balanceArray, openOrders)
+    if (String(d.action).toUpperCase() === 'BUY' && d.positionPct > 0) {
+      logger.info(
+        `BUY sizing ${d.symbol}: pct=${Number(sizingPlan.effectivePositionPct || 0).toFixed(0)}% ` +
+        `of $${Number(sizingPlan.usdAvailable || 0).toFixed(2)} -> $${Number(d.usdAmount).toFixed(2)}`
       );
+    }
 
-      if (usd > usdAvailable + 0.01) {
+    if (String(d.action).toUpperCase() === 'SELL' && d.positionPct > 0) {
+      logger.info(
+        `SELL sizing ${d.symbol}: pct=${Number(sizingPlan.effectivePositionPct || 0).toFixed(0)}% ` +
+        `sellable=${Number(sizingPlan.sellableCrypto || 0).toFixed(8)} ${sizingPlan.baseCurrency || ''} ` +
+        `-> base=${Number(d.baseAmount || 0).toFixed(8)} (~$${Number(d.usdAmount).toFixed(2)})`
+      );
+    }
+
+    if (d.positionPct <= 0) {
+      logger.info(`Legacy usdAmount mode: $${Number(d.usdAmount || 0).toFixed(2)} for ${d.symbol}`);
+    }
+
+    if (String(d.action).toUpperCase() === 'BUY') {
+      const usdAvailable = Number(sizingPlan?.usdAvailable || 0);
+      if (d.usdAmount > usdAvailable + 0.01) {
         execResults.push({
           ...d,
-          rendimiento,
+          rendimiento: historicalRendimiento,
           status: 'skipped',
           reason: `Insufficient available USD ($${usdAvailable.toFixed(2)}) after open BUY limits`
         });
@@ -165,59 +125,46 @@ export async function executeDecisions(
       }
     }
 
-    if (d.action === 'SELL') {
-      const normalizedSymbol = d.symbol.replace('/', '-');
-      const baseCurrency = normalizedSymbol.split('-')[0];
-      const currentPrice = indicators[normalizedSymbol]?.currentPrice || 0;
+    if (String(d.action).toUpperCase() === 'SELL') {
+      const sellableCrypto = Number(sizingPlan?.sellableCrypto || 0);
+      const baseNeeded = Number(d.baseAmount || 0);
+      const baseCurrency = sizingPlan?.baseCurrency || d.symbol.replace('/', '-').split('-')[0];
 
-      const managedPos = managedPositions.find(p => p.symbol.startsWith(baseCurrency + '-'));
-      const coinManagedBalance = managedPos ? managedPos.qty : 0;
-
-      const coinAvailableReal = Number(
-        realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
-        getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol)
-      );
-
-      const coinSellable = Math.min(coinManagedBalance, coinAvailableReal);
-
-      if (currentPrice > 0) {
-        const qtyNeeded = usd / currentPrice;
-        if (qtyNeeded > coinSellable + 0.00000001) {
-          execResults.push({
-            ...d,
-            rendimiento,
-            status: 'skipped',
-            reason: `Insufficient available ${baseCurrency} (${coinSellable.toFixed(8)}) after open SELL limits`
-          });
-          skippedCount++;
-          continue;
-        }
+      if (baseNeeded > 0 && baseNeeded > sellableCrypto + 0.00000001) {
+        execResults.push({
+          ...d,
+          rendimiento: historicalRendimiento,
+          status: 'skipped',
+          reason: `Insufficient available ${baseCurrency} (${sellableCrypto.toFixed(8)}) after open SELL limits`
+        });
+        skippedCount++;
+        continue;
       }
     }
 
-    // ── Execute Forced Exit Logic (SL/TP) ─────────────────────
     const forcedResult = await handleForcedExit(d, {
       orders,
       openOrders,
       client,
       indicators,
       balanceArray,
-      chatId
+      chatId,
+      config
     });
 
     if (forcedResult.shouldSkip) {
-      execResults.push({ ...d, rendimiento, status: 'skipped', reason: forcedResult.reason });
+      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'skipped', reason: forcedResult.reason });
       skippedCount++;
       continue;
     }
 
-    const minOrder = config.trading.minOrderUsd;
-    usd = d.usdAmount || usd;
+    const minOrder = Number(config.trading.minOrderUsd || 0);
+    const usd = Number(d.usdAmount || 0);
 
-    if (isNaN(usd) || usd < minOrder) {
+    if (String(d.action).toUpperCase() === 'BUY' && (!Number.isFinite(usd) || usd < minOrder)) {
       execResults.push({
         ...d,
-        rendimiento,
+        rendimiento: historicalRendimiento,
         status: 'skipped',
         reason: `Amount $${usd} < minimum $${minOrder}`
       });
@@ -225,10 +172,9 @@ export async function executeDecisions(
       continue;
     }
 
-    // ── Execute ───────────────────────────────────────────────
     try {
       const normalizedSymbol = d.symbol.replace('/', '-');
-      const currentPrice = indicators[normalizedSymbol]?.currentPrice;
+      const currentPrice = Number(indicators[normalizedSymbol]?.currentPrice || 0);
       if (!currentPrice) throw new Error(`No current price in indicators for ${d.symbol}`);
 
       let rrMetrics = null;
@@ -237,66 +183,85 @@ export async function executeDecisions(
           currentPrice,
           parseFloat(d.takeProfit),
           parseFloat(d.stopLoss),
-          d.action.toLowerCase()
+          String(d.action).toLowerCase()
         );
       }
 
       logger.info(
-        `💼 ${d.action} ${d.symbol}: $${usd}` +
+        `EXEC ${d.action} ${d.symbol}: usd=$${usd.toFixed(2)} base=${Number(d.baseAmount || 0).toFixed(8)}` +
         (rrMetrics ? ` | R/R: ${rrMetrics.riskRewardRatio}` : '')
       );
 
       const orderResult = await orders.placeOrder({
         symbol: d.symbol,
-        side: d.action.toLowerCase(),
+        side: String(d.action).toLowerCase(),
         type: d.orderType ?? 'market',
         usdAmount: usd,
         baseAmount: d.baseAmount,
         price: d.limitPrice,
-        currentPrice: currentPrice,
+        currentPrice,
         takeProfit: d.takeProfit,
-        stopLoss: d.stopLoss,
+        stopLoss: d.stopLoss
       });
 
-      execResults.push({ ...d, rendimiento, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
+      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
       executedCount++;
 
-      // 🔔 Notify order execution immediately
-      try {
-        await notifyOrderExecuted({
-          symbol: d.symbol,
-          side: d.action.toLowerCase(),
-          qty: orderResult.qty || 'pte.',
-          orderType: orderResult.type,
-          usdAmount: usd.toFixed(2),
-          price: currentPrice.toFixed(2),
-        }, chatId);
-      } catch (err) {
-        logger.warn(`⚠️  Failed to notify order execution: ${err.message}`);
+      if (d.defensive === true && String(d.action).toUpperCase() === 'SELL') {
+        await notifyDefensiveSell(d, usd, chatId).catch(() => { });
       }
 
-      // Save order to MongoDB
+      try {
+        const messagePayload = buildExecutionNotificationPayload({
+          decision: d,
+          orderResult,
+          usdAmount: usd,
+          currentPrice
+        });
+        await notifyOrderExecuted(messagePayload, chatId);
+      } catch (err) {
+        logger.warn(`Failed to notify order execution: ${err.message}`);
+      }
+
       if (dbConnected && orderResult) {
         try {
-          let orderRendimiento = null;
+          let orderRendimiento = Number.isFinite(Number(historicalRendimiento)) ? Number(historicalRendimiento) : null;
           let realizedPnlUsd = null;
           let realizedRoiPct = null;
           let fifoMatches = null;
 
-          if (d.action.toLowerCase() === 'sell' && orderResult.qty && currentPrice) {
-            const sellResult = await applySellToOpenLots(d.symbol, orderResult.qty, currentPrice, chatId);
+          if (String(d.action).toLowerCase() === 'sell' && orderResult.qty && currentPrice) {
+            const normalizedPositionPct = Number(d.positionPct || 0);
+            const isSellAllIntent = normalizedPositionPct >= 0.999 ||
+              String(d.summaryReasoning || '').toLowerCase().includes('sell 100% para evitar residual no operable');
+            const residualCloseBelowUsd = isSellAllIntent
+              ? Number(config?.trading?.sellAllResidualUsdThreshold ?? 4)
+              : 0;
+
+            const sellResult = await applySellToOpenLots(
+              d.symbol,
+              orderResult.qty,
+              currentPrice,
+              chatId,
+              { residualCloseBelowUsd }
+            );
             fifoMatches = sellResult.fifoMatches;
             realizedPnlUsd = sellResult.realizedPnlUsd;
             realizedRoiPct = sellResult.realizedRoiPct;
-            orderRendimiento = sellResult.realizedRoiPct; // legacy fallback mapping
+            logger.info(`Realized FIFO performance for ${d.symbol}: ${sellResult.realizedRoiPct}% (PnL: $${realizedPnlUsd})`);
 
-            logger.info(`📊 Realised FIFO performance for ${d.symbol}: ${orderRendimiento}% (PnL: $${realizedPnlUsd})`);
+            if (Number(sellResult.autoClosedResidualLots || 0) > 0) {
+              logger.warn(
+                `Residual cleanup applied for ${d.symbol}: lots=${sellResult.autoClosedResidualLots}, ` +
+                `usd~$${Number(sellResult.autoClosedResidualUsd || 0).toFixed(2)}`
+              );
+            }
           }
 
           await saveOrder({
             decisionId: d.mongoDecisionId,
             symbol: d.symbol,
-            side: d.action.toLowerCase(),
+            side: String(d.action).toLowerCase(),
             orderType: d.orderType || 'market',
             qty: orderResult.qty || '',
             price: currentPrice,
@@ -325,7 +290,7 @@ export async function executeDecisions(
             fifoMatched: typeof d.fifoMatched === 'boolean' ? d.fifoMatched : null
           });
 
-          if (d.action.toLowerCase() === 'sell') {
+          if (String(d.action).toLowerCase() === 'sell') {
             try {
               const cooldownMinutes = Number(config?.trading?.postSellCooldownMinutes ?? 360);
               await markLifecycleAfterSell({
@@ -337,47 +302,43 @@ export async function executeDecisions(
                 phase: d.lifecyclePhase || d.positionLifecyclePhase || null
               });
             } catch (err) {
-              logger.warn(`⚠️ Failed to mark lifecycle cooldown for ${d.symbol}: ${err.message}`);
+              logger.warn(`Failed to mark lifecycle cooldown for ${d.symbol}: ${err.message}`);
+            }
+
+            try {
+              const latestSummary = await getOpenPositionSummary(d.symbol, currentPrice, chatId);
+              await updatePositionLifecycleState({
+                symbol: d.symbol,
+                chatId,
+                positionSummary: latestSummary,
+                currentPrice,
+                minOrderUsd: Number(config?.trading?.minOrderUsd || 0)
+              });
+            } catch (err) {
+              logger.warn(`Failed to sync lifecycle state after SELL for ${d.symbol}: ${err.message}`);
             }
           }
         } catch (err) {
-          logger.warn(`⚠️  Failed to save order: ${err.message}`);
+          logger.warn(`Failed to save order: ${err.message}`);
         }
       }
     } catch (err) {
-      execResults.push({ ...d, rendimiento, status: 'error', error: err.message });
+      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'error', error: err.message });
       errorCount++;
-      logger.error(`❌ ${d.symbol}: ${err.message}`);
-      await notifyError(`Order failed for ${d.symbol}: ${err.message}`, chatId).catch(() => { });
+      logger.error(`${d.symbol}: ${err.message}`);
+      if (isExchangeRejectionError(err.message)) {
+        await notifyExchangeRejection(d, err.message, chatId).catch(() => { });
+      }
+      await notifyError(`Order failed for ${d.symbol}: ${err.message}`, chatId).catch(() => {});
     }
   }
 
   return { execResults, executedCount, skippedCount, errorCount };
 }
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function normalizeForAiPositionPct(rawValue) {
-  const n = Number(rawValue);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-
-  if (n > 0 && n <= 1) {
-    return n * 100;
-  }
-
-  return n;
-}
-
 function normalizeMaxTradeSizePct(rawValue) {
   const n = Number(rawValue);
   if (!Number.isFinite(n) || n <= 0) return 25;
-
-  if (n > 0 && n <= 1) {
-    return n * 100;
-  }
-
+  if (n > 0 && n <= 1) return n * 100;
   return n;
 }
-

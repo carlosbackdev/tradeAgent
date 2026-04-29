@@ -15,13 +15,22 @@ export class OrderManager {
   _formatPrice(price) {
     const num = Number(price);
     if (!Number.isFinite(num) || num <= 0) return null;
-    let originalDecimals = 0;
-    if (price.toString().includes('.')) {
-      originalDecimals = price.toString().split('.')[1].length;
-    }
-    if (num >= 1000) return num.toFixed(2);
-    if (num >= 1) return num.toFixed(Math.max(4, Math.min(originalDecimals, 8)));
-    return num.toFixed(Math.max(6, Math.min(originalDecimals, 8)));
+
+    const raw = String(price).trim();
+    const hasDot = raw.includes('.');
+    const originalDecimals = hasDot ? raw.split('.')[1].length : 0;
+
+    const minDecimals = num >= 1000 ? 2 : (num >= 1 ? 4 : 6);
+    const usedDecimals = clampDecimals(Math.max(minDecimals, originalDecimals));
+
+    return num.toFixed(usedDecimals);
+  }
+
+  _formatBaseAmount(baseAmount) {
+    const n = Number(baseAmount);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const floored = Math.floor(n * 100000000) / 100000000;
+    return floored > 0 ? floored.toFixed(8) : null;
   }
 
   async placeOrder({ symbol, side, type, usdAmount, baseAmount, price, currentPrice, takeProfit, stopLoss }) {
@@ -39,19 +48,22 @@ export class OrderManager {
     let order_configuration;
     let estimatedQty = null;
 
+    const normalizedSide = side.toLowerCase();
+    const normalizedBaseAmount = this._formatBaseAmount(baseAmount);
+
     if (type === 'market') {
       const priceForQty = currentPrice || price;
       if (priceForQty) {
         estimatedQty = (usd / Number(priceForQty)).toFixed(8);
       }
       
-      if (side.toLowerCase() === 'sell' && baseAmount && Number(baseAmount) > 0) {
+      if (normalizedSide === 'sell' && normalizedBaseAmount) {
         order_configuration = {
           market: {
-            base_size: Number(baseAmount).toFixed(8)
+            base_size: normalizedBaseAmount
           }
         };
-        estimatedQty = Number(baseAmount).toFixed(8);
+        estimatedQty = normalizedBaseAmount;
       } else {
         order_configuration = {
           market: {
@@ -65,11 +77,14 @@ export class OrderManager {
         throw new Error(`Invalid limit price: ${price}`);
       }
 
-      let cryptoQty;
-      if (side.toLowerCase() === 'sell' && baseAmount && Number(baseAmount) > 0) {
-        cryptoQty = Number(baseAmount).toFixed(8);
+      let cryptoQty = null;
+      if (normalizedSide === 'sell' && normalizedBaseAmount) {
+        cryptoQty = normalizedBaseAmount;
       } else {
         cryptoQty = (usd / Number(formattedPrice)).toFixed(8);
+        if (normalizedSide === 'sell') {
+          logger.warn(`SELL LIMIT without baseAmount for ${symbol}: fallback to usd/price sizing for compatibility`);
+        }
       }
       
       estimatedQty = cryptoQty;
@@ -88,7 +103,7 @@ export class OrderManager {
     const payload = {
       client_order_id: randomUUID(),
       symbol: revolutSymbol,
-      side: side.toLowerCase(),
+      side: normalizedSide,
       order_configuration,
     };
 
@@ -162,4 +177,10 @@ export class OrderManager {
       slDistanceNum: slDistancePct,
     };
   }
+}
+
+function clampDecimals(decimals) {
+  const n = Number(decimals);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(Math.max(Math.trunc(n), 0), 8);
 }

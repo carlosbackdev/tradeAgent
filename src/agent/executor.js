@@ -5,7 +5,7 @@
 
 import { computeIndicators, closesFromCandles, computeCrossTfConfluence } from './context/indicators.js';
 import { notify, notifyError } from '../telegram/handles.js';
-import { formatDecision, formatOpenOrdersMessage } from '../utils/formatter.js';
+import { formatOpenOrdersMessage } from '../utils/formatter.js';
 import { logger } from '../utils/logger.js';
 import {
   connectDB,
@@ -13,11 +13,9 @@ import {
   disconnectDB,
   getPreviousDecisions,
   getOpenPositionSummary,
-  getRecentOpenBuyFromOtherSymbols
+  getRecentOpenBuyFromOtherSymbols,
+  getTradingPerformance
 } from '../services/mongo/mongo-service.js';
-import { clientAgentInstance } from './job/client-agent-main.js';
-import { callAgentWithFallback, isFallbackChainEnabled } from './services/fallback-chain.js';
-import { buildAnalyzerMessage } from './context/analyzer-market.js';
 import { config } from '../config/config.js';
 import { getCrossSymbolLookbackMinutes } from '../utils/cron-formatter.js';
 
@@ -27,10 +25,11 @@ import { checkForcedDecisions } from './workflow/decision-engine.js';
 import { buildAnalyzerContext } from './workflow/context-builder.js';
 import { executeDecisions } from './workflow/order-executor.js';
 import { processOpenOrders } from './workflow/open-orders-manager.js';
-import { buildFinalContext } from './context/formatters/context-summary.js';
 import { applyPortfolioManagerDecision, logPortfolioOverride } from './workflow/portfolio-manager.js';
 import { AnalyzerContextEnricher } from './services/functions/analyzer-context-enricher.js';
 import { DecisionPersistenceService } from '../services/mongo/decision-persistence-service.js';
+import { analyzeTradingIntent } from './workflow/analyzer.js';
+import { buildTradingReport } from './workflow/report/trading-report.js';
 
 export async function runAgentCycle(triggerReason = 'cron', coin, question = '', userConfig = null) {
   const startTime = Date.now();
@@ -114,7 +113,8 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
 
     // ── 3. Fetch open lots and check SL/TP (EARLY) ──────────────────
     let openPositionSummary = null;
-    let rendimiento = null;
+    let positionRendimiento = null;
+    let historicalRendimiento = null;
     let lifecycleState = null;
 
     if (dbConnected) {
@@ -137,7 +137,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       chatId
     );
     const fifoRendimiento = Number(openPositionSummary?.unrealizedRoiPct);
-    rendimiento = Number.isFinite(fifoRendimiento) ? fifoRendimiento : calculatedRendimiento;
+    positionRendimiento = Number.isFinite(fifoRendimiento) ? fifoRendimiento : calculatedRendimiento;
 
     // ── 4. Build context for Model AI (EARLY - needed for open order analysis) ──
     const previousDecisionsBySymbol = {};
@@ -173,6 +173,21 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       realAvailableBalances
     );
 
+    const contextHistoricalRend = Number(analyzerContext?.tradingStats?.accumulatedRendimiento);
+    if (Number.isFinite(contextHistoricalRend)) {
+      historicalRendimiento = contextHistoricalRend;
+    } else if (dbConnected) {
+      try {
+        const perf = await getTradingPerformance(chatId, balances);
+        const hist = Number(perf?.accumulatedRendimiento);
+        historicalRendimiento = Number.isFinite(hist) ? hist : 0;
+      } catch {
+        historicalRendimiento = 0;
+      }
+    } else {
+      historicalRendimiento = 0;
+    }
+
     // Fetch cross symbol open buy context
     let crossSymbolRecentOpenBuy = null;
     if (dbConnected) {
@@ -207,7 +222,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       analyzerContext,
       previousDecisionsBySymbol,
       openPositionSummary,
-      rendimiento,
+      rendimiento: positionRendimiento,
       crossSymbolRecentOpenBuy,
       lookbackMinutes,
       snapshotSymbol: snapshot.symbol,
@@ -308,45 +323,22 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       };
     }
 
-    // ── 4.4 Build final cleaned context for LLM ───────────────────
-    const AiPayload = buildAnalyzerMessage(
-      buildFinalContext(analyzerContext, {
-        openLots: openPositionSummary?.openLots,
-        openOrdersThisCoin
-      }),
-      question,
-      effectiveConfig.trading,
-      coin
-    );
-
-    // ── 5. Get AI decision or use forced decision ──────────────
+    // ── 4.4 Analyze trading intent (LLM layer) ───────────────────
     let decision;
-    if (forcedDecision) {
-      decision = { decisions: [forcedDecision] };
-      logger.info(`⚡ Bypassing AI. Forced decision: ${forcedDecision.reasoning}`);
-    } else {
-      try {
-        const llmCfg = effectiveConfig.llm;
-        // is active three call first call with free model if fail try with paid model
-        if (isFallbackChainEnabled(effectiveConfig)) {
-          logger.info('🔗 Usando fallback chain para LLM analysis');
-          decision = await callAgentWithFallback(AiPayload, effectiveConfig, effectiveConfig.trading);
-        } else {
-          decision = await clientAgentInstance.callAgentAnalyzer(AiPayload, llmCfg.apiKey, llmCfg.model, effectiveConfig.trading, llmCfg);
-        }
-
-        logger.info(`✅ ${llmCfg.provider} decision received`);
-        logger.debug('Decision:', JSON.stringify(decision, null, 2));
-      } catch (err) {
-        throw new Error(`LLM analysis failed: ${err.message}`);
-      }
-    }
-
-    if (decision && Array.isArray(decision.decisions)) {
-      for (const d of decision.decisions) {
-        d.takeProfit = d.takeProfit || effectiveConfig.trading.takeProfitPct;
-        d.stopLoss = d.stopLoss || effectiveConfig.trading.stopLossPct;
-      }
+    try {
+      decision = await analyzeTradingIntent({
+        forcedDecision,
+        analyzerContext,
+        openPositionSummary,
+        openOrdersThisCoin,
+        question,
+        effectiveConfig,
+        coin
+      });
+      logger.info(`Decision received for ${coin}`);
+      logger.debug('Decision:', JSON.stringify(decision, null, 2));
+    } catch (err) {
+      throw new Error(`LLM analysis failed: ${err.message}`);
     }
 
     if (!forcedDecision && decision && Array.isArray(decision.decisions)) {
@@ -375,7 +367,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       decisions: decision.decisions,
       indicators,
       effectiveConfig,
-      rendimiento,
+      rendimiento: historicalRendimiento,
       usedModel: decision.usedModel || null,
       marketSummary: decision.marketSummary || '',
       triggerReason,
@@ -392,7 +384,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       realAvailableBalances,
       indicators,
       effectiveConfig,
-      rendimiento,
+      historicalRendimiento,
       dbConnected,
       chatId,
       analyzerContext.tradingStats?.openPositions || []
@@ -401,7 +393,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
     // ── 8. Notify via Telegram ─────────────────────────────────────
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     try {
-      const message = formatDecision({ decision, execResults, elapsed, triggerReason });
+      const message = buildTradingReport({ decision, execResults, elapsed, triggerReason });
       await notify(message, chatId);
     } catch (err) {
       logger.error('Failed to send Telegram notification:', err.message);
