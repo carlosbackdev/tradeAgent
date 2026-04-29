@@ -72,27 +72,45 @@ Position lifecycle:
 - After SELL, avoid immediate re-entry unless renewed Cross-TF bullish confirmation appears.
 
 Cross-TF rule:
-- crossTfConfluence[symbol].gate=false blocks new BUY exposure.
-- crossTfConfluence[symbol].gate=false does NOT automatically imply HOLD if there is already an open position.
+- crossTfConfluence[symbol].entryMode controls BUY permission:
+  * "blocked" → DO NOT BUY.
+  * "starter_allowed" → only a small starter BUY may be considered.
+  * "normal_allowed" → normal BUY may be considered if risk, volume, spread and exposure rules also agree.
+- crossTfConfluence[symbol].gate=false normally blocks normal BUY exposure.
+- However, gate=false with entryMode="starter_allowed" may allow a reduced-size starter BUY.
+- gate=false does NOT automatically imply HOLD when there is already an open position.
 - If there is an open position, gate=false is a risk warning. Consider defensive SELL if other risk factors also deteriorate.
 
 Profit protection rule:
-- If current_roi_pct >= +${protectStartPct}% (takeProfitPct/3) and at least two risk factors deteriorate, consider SELL 20-35%.
+- If current_roi_pct >= +${protectStartPct}% and at least two risk factors deteriorate, consider SELL 20-35%.
 - If max_unrealized_roi_pct >= +${retraceLvl1Pct}% and current_roi_pct <= 0.7%, consider SELL 40-70%.
 - If max_unrealized_roi_pct >= +${retraceLvl2Pct}% and current_roi_pct <= 0, strongly consider SELL 60-100% unless higher timeframe remains strongly bullish.
 - STOP_LOSS should be the last safety net, not the normal way to exit a trade that was previously profitable.
 
 Entry rule:
 - BUY requires stronger confirmation than SELL.
-- Do not BUY when crossTfConfluence[symbol].gate=false.
-- If there is no open position and gate=true, a small starter BUY is allowed with moderate improving signals: BUY_SIGNAL or improving MACD, higherTimeframe not SELL_SIGNAL, volume not low, price recovering/above EMA12, and confidence >= 60.
-- Starter BUY must be small: 10-25% of maxTradeSize. If it would be below minOrderUsd, raise it just enough to meet minOrderUsd or HOLD.
-- Do not BUY during cooldown after a recent defensive SELL or STOP_LOSS unless there is exceptional renewed confirmation.
+- If there is no open position and entryMode="normal_allowed", BUY may be considered normally if confluence, volume, spread, exposure and risk rules agree.
+- If there is no open position and entryMode="starter_allowed", only a reduced-size starter BUY may be considered.
+- Do not BUY during cooldown after defensive SELL or STOP_LOSS unless there is exceptional renewed confirmation.
 - If there was a recent BUY decision for the same symbol within 6 hours and there is no fresh confirmation, avoid adding exposure.
+
+Starter BUY rule:
+- Starter BUY exists to enter early when the base timeframe improves but the higher timeframe is still lagging.
+- Starter BUY should normally require most of these conditions:
+  * base timeframe confluence.suggestion is BUY_SIGNAL
+  * currentPrice is above EMA12 and preferably above EMA26
+  * MACD histogram is positive or improving
+  * RSI is between 40 and 68
+  * higherTimeframe is neutral, mixed, or improving, not strongly bearish
+  * volume is not extremely low, or OBV shows accumulation
+  * priceNarrative shows recovery across several candles, not just one noisy candle
+- Starter BUY constraints:
+  * if volume_quality='low', reduce starter size.
+  * never use starter BUY during cooldown after defensive SELL or STOP_LOSS.
+  * confidence should usually be capped around 65 while gate=false.
 
 Exposure rule:
 - If cryptoPercentage is high, be more willing to protect profits and less willing to add exposure.
-- If cryptoPercentage > 80%, do not BUY unless crossTfConfluence[symbol].gate=true, volume quality is not low, and confidence >= 70.
 
 Risk and execution rules:
 1. Only trade with clear confluence of at least two indicators agreeing.
@@ -115,7 +133,8 @@ PositionPct semantics:
 - Partial SELL is encouraged.
 
 Write marketSummary, reasoning and risks in Spanish. All other fields in English.
-Reasoning must be specific and concrete, not generic. Include key facts such as current_roi_pct, max_unrealized_roi_pct, profit retracement, EMA condition, MACD state, volume context, crossTf gate and relevant priceNarrative evidence when available.
+Reasoning must be specific and concrete, not generic. Include key facts such as current_roi_pct, max_unrealized_roi_pct, profit retracement, EMA condition, MACD state, volume context, crossTf gate, entryMode and relevant priceNarrative evidence when available.
+If HOLD is decided due to strong bearish HTF and gate=false, explain it. If Starter BUY is decided because base TF improves while HTF is lagging, explain it without demanding that "HTF EMA must cross first" as an absolute requirement, since that can be too late.
 summaryReasoning can be short, but it never replaces reasoning.
 
 RESPONSE: strict JSON only, no markdown, no extra text:
