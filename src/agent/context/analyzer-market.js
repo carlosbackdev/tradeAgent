@@ -91,7 +91,6 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
       regimeSummary: regimeSummaryBySymbol,
       atrContext: atrBySymbol,
       recentMarketContext: recentMarketContextBySymbol,
-      positionLifecycle: normalizedPositionLifecycle,
       previousDecisions: context.previousDecisions || {},
       priceChangeSinceLastAnalysisPct: context.priceChangeSinceLastAnalysisPct ?? 0,
       currentPrice: context.currentPrice ?? null,
@@ -202,4 +201,4 @@ function parsePercent(value) {
   const clean = String(value).replace('%', '');
   const n = Number(clean);
   return Number.isFinite(n) ? n : null;
-}
+}
