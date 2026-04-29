@@ -119,7 +119,7 @@ export function applyPortfolioManagerDecision({
 
   if (!hasOpenPosition) {
     if (decisionAction === 'BUY') {
-      if (crossTf?.gate === false) {
+      if (crossTf?.gate === false && crossTf?.entryMode !== 'starter_allowed') {
         return annotateDecision(buildHoldOverride(decision, {
           summary: 'HOLD: BUY bloqueado por Cross-TF',
           reasoning: buildHoldNoPositionReasoning(contextFacts, 'cross_tf_block')
@@ -448,7 +448,7 @@ function buildHoldCooldownReasoning(contextFacts, mode) {
 
 function buildHoldNoPositionReasoning(contextFacts, reason) {
   if (reason === 'cross_tf_block') {
-    return 'HOLD: no hay posicion abierta y Cross-TF gate=false bloquea nuevas compras hasta que reaparezca confirmacion alcista multi-timeframe.';
+    return 'HOLD: no hay posicion abierta y Cross-TF gate=false (blocked) impide nuevas compras. El timeframe superior no avala una entrada temprana.';
   }
 
   if (reason === 'high_exposure') {
@@ -501,7 +501,8 @@ function buildIndicatorsDetail(contextFacts) {
   }
 
   if (typeof gate === 'boolean') {
-    parts.push(`Cross-TF gate=${gate}`);
+    const mode = contextFacts?.crossTf?.entryMode || 'unknown';
+    parts.push(`Cross-TF gate=${gate} (mode=${mode})`);
   }
 
   if (regime) {

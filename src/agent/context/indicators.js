@@ -436,13 +436,45 @@ export function computeCrossTfConfluence(baseTfIndicators, higherTfIndicators) {
   );
   const gate = score >= 1 && !hardConflict;
 
+  let entryMode = "blocked";
+  let reason = gate
+    ? `${signals.length} señales alineadas entre TFs`
+    : `Conflicto multi-TF: ${conflicts.length ? conflicts.join(', ') : 'insufficient alignment'}`;
+
+  if (gate) {
+    entryMode = "normal_allowed";
+  } else {
+    const baseSuggestion = baseTfIndicators?.confluence?.suggestion;
+    const baseMacdImproving = baseTfIndicators?.signals?.includes('MACD_MOMENTUM_INCREASING') || baseMacdDirection === 'bullish';
+    const baseRsiVal = getRsi(baseTfIndicators);
+    const baseVolDiv = baseTfIndicators?.volumeContext?.price_vol_divergence;
+
+    const higherTfBearishCount = higherTfIndicators?.confluence?.bearishCount || 0;
+    const higherTfBullishCount = higherTfIndicators?.confluence?.bullishCount || 0;
+    const higherSuggestion = higherTfIndicators?.confluence?.suggestion;
+
+    const isStrongBearishHtf = (higherTfBearishCount >= higherTfBullishCount + 2) ||
+      (higherSuggestion === 'SELL_SIGNAL' && higherMacdDirection === 'bearish' && higherEmaDirection === 'bearish');
+
+    if (
+      baseSuggestion === 'BUY_SIGNAL' &&
+      baseEmaDirection === 'bullish' &&
+      baseMacdImproving &&
+      !isStrongBearishHtf &&
+      baseRsiVal !== null && baseRsiVal < 70 &&
+      baseVolDiv !== 'bearish_divergence'
+    ) {
+      entryMode = "starter_allowed";
+      reason = "Base TF bullish but HTF lagging; starter BUY allowed with reduced size";
+    }
+  }
+
   return {
     score,
     gate,
+    entryMode,
     signals,
     conflicts,
-    reason: gate
-      ? `${signals.length} señales alineadas entre TFs`
-      : `Conflicto multi-TF: ${conflicts.length ? conflicts.join(', ') : 'insufficient alignment'}`,
+    reason,
   };
 }
