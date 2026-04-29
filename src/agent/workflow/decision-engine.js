@@ -9,6 +9,7 @@ import { getOpenPositionSummary } from '../../services/mongo/mongo-service.js';
 export async function checkForcedDecisions(indicators, coin, balanceArray, realAvailableBalances, config, dbConnected = false, chatId = null) {
   let forcedDecision = null;
   let rendimiento = null;
+  const forcedExitMinUsd = resolveMinForcedExitUsd(config);
 
   if (dbConnected) {
     const baseCurrency = coin.split('-')[0];
@@ -25,7 +26,14 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
 
           const tpPct = config.trading.takeProfitPct || 0;
           const slPct = config.trading.stopLossPct || 0;
-          const usdWorth = baseBalance * currentPrice * 0.9999;
+          const sellBuffer = Number(config?.trading?.sellSizeBuffer || 0.999);
+          const bufferedQty = Math.floor(baseBalance * sellBuffer * 100000000) / 100000000;
+          const usdWorth = bufferedQty * currentPrice;
+
+          if (usdWorth < forcedExitMinUsd) {
+            logger.info(`ℹ️  Forced exit ignored as dust for ${coin}: estUsd=$${usdWorth.toFixed(6)} < $${forcedExitMinUsd}`);
+            return { forcedDecision: null, rendimiento };
+          }
 
           if (tpPct > 0 && rendimiento >= tpPct) {
             forcedDecision = {
@@ -35,6 +43,7 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
               reasoning: `Forced Take Profit met at +${rendimiento}% (Avg Entry: $${positionSummary.avgEntryPrice}, Current: $${currentPrice})`,
               orderType: 'market',
               usdAmount: parseFloat(usdWorth.toFixed(2)),
+              baseAmount: bufferedQty,
               forced: true,
               forcedReason: 'TAKE_PROFIT'
             };
@@ -46,6 +55,7 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
               reasoning: `Forced Stop Loss met at ${rendimiento}% (Avg Entry: $${positionSummary.avgEntryPrice}, Current: $${currentPrice})`,
               orderType: 'market',
               usdAmount: parseFloat(usdWorth.toFixed(2)),
+              baseAmount: bufferedQty,
               forced: true,
               forcedReason: 'STOP_LOSS'
             };
@@ -60,4 +70,10 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
   }
 
   return { forcedDecision, rendimiento };
+}
+
+function resolveMinForcedExitUsd(config) {
+  const n = Number(config?.trading?.forcedExitMinUsd ?? config?.trading?.dustIgnoreUsd ?? 0.1);
+  if (!Number.isFinite(n) || n <= 0) return 0.1;
+  return n;
 }

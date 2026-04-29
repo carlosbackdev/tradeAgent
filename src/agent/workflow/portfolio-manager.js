@@ -4,8 +4,16 @@
  */
 
 import { logger } from '../../utils/logger.js';
-
-const BEARISH_PATTERNS = new Set(['potential_reversal_down', 'three_consecutive_red']);
+import {
+  buildRiskProfile,
+  shouldAllowHardStop,
+  shouldBlockRecentSell,
+  shouldAllowDefensiveSell,
+  capSellPct,
+  normalizeSellRisk,
+  isExtremeInvalidation
+} from './risk/risk-policy.js';
+import { evaluateLifecycleState } from './risk/lifecycle-policy.js';
 
 const RISK_FACTOR_LABELS = {
   cross_tf_conflict: 'conflicto en confluencia multi-timeframe (Cross-TF gate=false)',
@@ -20,24 +28,6 @@ const RISK_FACTOR_LABELS = {
   bearish_price_pattern: 'patron de precio bajista',
   high_crypto_exposure: 'exposicion crypto alta'
 };
-
-function getLastBuyAgeMinutes(positionSummary, previousDecisionsBySymbol, symbol) {
-  if (positionSummary?.openLots?.length > 0) {
-    const sortedLots = [...positionSummary.openLots].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    const lastLot = sortedLots[0];
-    if (lastLot?.created_at) {
-      return (Date.now() - new Date(lastLot.created_at).getTime()) / 60000;
-    }
-  }
-
-  const history = previousDecisionsBySymbol?.[symbol] || [];
-  const lastBuy = history.find((d) => String(d.action || '').toUpperCase() === 'BUY');
-  if (lastBuy?.timestamp) {
-    return (Date.now() - new Date(lastBuy.timestamp).getTime()) / 60000;
-  }
-
-  return null;
-}
 
 export function applyPortfolioManagerDecision({
   decision,
@@ -60,49 +50,57 @@ export function applyPortfolioManagerDecision({
   const atrContext = pairCtx?.atr || null;
 
   const cryptoPercentage = Number(analyzerContext?.balances?.summary?.cryptoPercentage || 0);
-  const minOrderUsd = Number(config?.trading?.minOrderUsd || 0);
+  const sellAllResidualUsdThreshold = resolveSellAllResidualUsdThreshold(config);
 
-  const lifecycle = lifecycleState || analyzerContext?.positionLifecycle?.[normalizedSymbol] || {};
-  const currentPrice = toNumber(indicators?.currentPrice, toNumber(lifecycle?.current_price, 0));
-  const totalQty = toNumber(
-    positionSummary?.totalOpenQty,
-    toNumber(positionSummary?.totalQty, toNumber(lifecycle?.total_qty, 0))
-  );
-  const estimatedUsdValue = Number((Math.max(0, totalQty) * Math.max(0, currentPrice)).toFixed(2));
-  const hasOpenPosition = totalQty > 0;
+  const lifecycleFacts = evaluateLifecycleState({
+    symbol: normalizedSymbol,
+    analyzerContext,
+    positionSummary,
+    lifecycleState,
+    config,
+    decision
+  });
 
-  const currentRoi = toNumber(
-    lifecycle?.current_roi_pct,
-    toNumber(positionSummary?.unrealizedRoiPct, toNumber(decision.currentRoi, 0))
-  );
-  const maxRoiSeen = toNumber(
-    lifecycle?.max_unrealized_roi_pct,
-    toNumber(decision.maxRoiSeen, currentRoi)
-  );
-  const profitRetracementPct = Number((maxRoiSeen - currentRoi).toFixed(4));
-
-  const lifecyclePhase = lifecycle?.phase || (hasOpenPosition ? 'IN_POSITION' : 'NO_POSITION');
-
-  const cooldownUntil = lifecycle?.cooldown_until ? new Date(lifecycle.cooldown_until) : null;
-  const cooldownActive = isFutureDate(cooldownUntil);
-  const recentDefensiveSell = isRecentDate(lifecycle?.last_defensive_sell_at, 6);
-  const recentBuyCooldownActive = hasRecentBuyCooldownFromHistory(
-    analyzerContext?.previousDecisions,
-    normalizedSymbol,
-    6
-  );
+  const {
+    lifecyclePhase,
+    currentRoi,
+    maxRoiSeen,
+    profitRetracementPct,
+    currentPrice,
+    estimatedUsdValue,
+    totalQty,
+    hasOpenPosition,
+    cooldownActive,
+    cooldownUntil,
+    recentDefensiveSell,
+    recentBuyCooldownActive,
+    stopLossPct,
+    minHoldMinutes,
+    ageMinutes,
+    isRecentBuy
+  } = lifecycleFacts;
 
   const decisionAction = String(decision.action || 'HOLD').toUpperCase();
   const decisionConfidence = toNumber(decision.confidence, 0);
   const decisionPct = normalizePct(decision.positionPct);
 
-  const riskFacts = buildRiskFactors({
+  const atrMoveSignificance = pairCtx?.atr?.move_significance || priceNarrative?.lastMoveVsATR || null;
+  const riskFacts = buildRiskProfile({
     crossTf,
     higherTf,
     indicators,
     priceNarrative,
     cryptoPercentage
   });
+
+  const extremeInvalidation = isExtremeInvalidation({
+    currentRoi,
+    riskFactors: riskFacts.list,
+    higherTfSell: riskFacts.higherTfSell,
+    baseTfSell: riskFacts.baseTfSell,
+    moveSignificance: atrMoveSignificance
+  });
+  riskFacts.extremeInvalidation = extremeInvalidation;
 
   const contextFacts = {
     symbol: normalizedSymbol,
@@ -112,7 +110,6 @@ export function applyPortfolioManagerDecision({
     profitRetracementPct,
     currentPrice,
     estimatedUsdValue,
-    minOrderUsd,
     totalQty,
     crossTf,
     indicators,
@@ -125,13 +122,13 @@ export function applyPortfolioManagerDecision({
     cooldownUntil,
     recentDefensiveSell,
     strongInvalidation: riskFacts.strongInvalidation,
-    higherTfSell: riskFacts.higherTfSell
+    higherTfSell: riskFacts.higherTfSell,
+    stopLossPct,
+    minHoldMinutes,
+    extremeInvalidation,
+    positionMature: !isRecentBuy,
+    sellAllResidualUsdThreshold
   };
-
-  const stopLossPct = Number(config?.trading?.stopLossPct || 2.5);
-  const minHoldMinutes = Number(config?.trading?.minHoldMinutesAfterBuy || 240);
-  const ageMinutes = getLastBuyAgeMinutes(positionSummary, analyzerContext?.previousDecisions, normalizedSymbol);
-  const isRecentBuy = ageMinutes !== null && ageMinutes < minHoldMinutes;
 
   contextFacts.isRecentBuy = isRecentBuy;
   contextFacts.ageMinutes = ageMinutes;
@@ -168,19 +165,10 @@ export function applyPortfolioManagerDecision({
     return annotateDecision(decision, contextFacts);
   }
 
-  const belowMinOrder = minOrderUsd > 0 && estimatedUsdValue > 0 && estimatedUsdValue < minOrderUsd;
-  if (belowMinOrder) {
-    return annotateDecision(buildHoldOverride(decision, {
-      summary: 'HOLD: posicion residual por debajo del minimo operable',
-      reasoning: buildResidualHoldReasoning(contextFacts)
-    }), contextFacts);
-  }
-
-  const defensiveCandidate = getDefensiveSellCandidate({
+  const defensiveCandidate = shouldAllowDefensiveSell({
     riskFacts,
     currentRoi,
     maxRoiSeen,
-    lifecyclePhase,
     isRecentBuy
   });
 
@@ -192,16 +180,24 @@ export function applyPortfolioManagerDecision({
   }
 
   if (decisionAction === 'SELL') {
-    if (isRecentBuy) {
-      if (!defensiveCandidate || defensiveCandidate.defensiveReason !== 'EXTREME_INVALIDATION') {
-        logger.info(`SELL blocked: recently bought ${Math.round(ageMinutes)}min ago, minHold=${minHoldMinutes}, roi=${currentRoi}, stopLoss=${stopLossPct}`);
-        return annotateDecision(buildHoldOverride(decision, {
-          summary: 'HOLD: venta bloqueada por maduracion',
-          reasoning: `HOLD: se evita una venta impulsiva. Comprado hace ${Math.round(ageMinutes)}min (minHold=${minHoldMinutes}min). ROI: ${currentRoi}%, no alcanza stop loss ni invalidacion extrema.`
-        }), contextFacts);
-      } else {
-        logger.info(`SELL allowed: extreme invalidation (age: ${Math.round(ageMinutes)}min)`);
-      }
+    const hardStopAllowed = shouldAllowHardStop({ currentRoi, stopLossPct });
+    const blockedByRecentBuy = shouldBlockRecentSell({
+      isRecentBuy,
+      hardStopAllowed,
+      extremeInvalidation,
+      forced: decision?.forced === true
+    });
+
+    if (blockedByRecentBuy) {
+      logger.info(`SELL blocked: recently bought ${Math.round(ageMinutes)}min ago, minHold=${minHoldMinutes}, roi=${currentRoi}, stopLoss=${stopLossPct}`);
+      return annotateDecision(buildHoldOverride(decision, {
+        summary: 'HOLD: venta bloqueada por maduracion',
+        reasoning: `HOLD: se evita una venta impulsiva. Comprado hace ${Math.round(ageMinutes)}min (minHold=${minHoldMinutes}min). ROI: ${currentRoi}%, no alcanza stop loss ni invalidacion extrema.`
+      }), contextFacts);
+    }
+
+    if (isRecentBuy && extremeInvalidation) {
+      logger.info(`SELL allowed: extreme invalidation (age: ${Math.round(ageMinutes)}min)`);
     }
 
     if (currentRoi <= 0 && currentRoi > -1.8 && !riskFacts.strongInvalidation) {
@@ -212,8 +208,16 @@ export function applyPortfolioManagerDecision({
           reasoning: `HOLD: el ROI es ${currentRoi}%, no hay suficientes factores de riesgo para justificar una venta parcial o total.`
         }), contextFacts);
       } else if (decisionPct > defensiveCandidate.positionPctMax) {
-        const capped = buildDefensiveSell(decision, defensiveCandidate, contextFacts, { minPct: defensiveCandidate.positionPctMin, maxPct: defensiveCandidate.positionPctMax });
-        return annotateDecision(capped, contextFacts);
+        const cappedPct = capSellPct(decisionPct, {
+          minPct: defensiveCandidate.positionPctMin,
+          maxPct: defensiveCandidate.positionPctMax,
+          defaultPct: defensiveCandidate.positionPctMax
+        });
+        const capped = buildDefensiveSell(decision, defensiveCandidate, contextFacts, {
+          minPct: cappedPct,
+          maxPct: cappedPct
+        });
+        return annotateDecision(enforceSellAllResidualDust(capped, contextFacts), contextFacts);
       }
     }
 
@@ -222,21 +226,30 @@ export function applyPortfolioManagerDecision({
         minPct: 80,
         maxPct: 100
       });
-      return annotateDecision(upgraded, contextFacts);
+      return annotateDecision(enforceSellAllResidualDust(upgraded, contextFacts), contextFacts);
     }
 
-    const normalizedExistingSell = normalizeSellForDust(decision, contextFacts);
-    return annotateDecision(normalizedExistingSell, contextFacts);
+    const normalizedExistingSell = {
+      ...decision,
+      positionPct: normalizeSellRisk(decision.positionPct)
+    };
+    return annotateDecision(enforceSellAllResidualDust(normalizedExistingSell, contextFacts), contextFacts);
   }
 
   if (defensiveCandidate) {
     if (decisionAction === 'HOLD') {
-      const overridden = buildDefensiveSell(decision, defensiveCandidate, contextFacts);
+      const overridden = enforceSellAllResidualDust(
+        buildDefensiveSell(decision, defensiveCandidate, contextFacts),
+        contextFacts
+      );
       return annotateDecision(overridden, contextFacts);
     }
 
     if (decisionAction === 'BUY' && riskFacts.list.length >= 3) {
-      const overridden = buildDefensiveSell(decision, defensiveCandidate, contextFacts);
+      const overridden = enforceSellAllResidualDust(
+        buildDefensiveSell(decision, defensiveCandidate, contextFacts),
+        contextFacts
+      );
       return annotateDecision(overridden, contextFacts);
     }
   }
@@ -251,154 +264,6 @@ export function applyPortfolioManagerDecision({
   return annotateDecision(decision, contextFacts);
 }
 
-function hasRecentBuyCooldownFromHistory(previousDecisionsBySymbol, symbol, hoursWindow) {
-  const history = previousDecisionsBySymbol?.[symbol] || [];
-  if (!Array.isArray(history) || history.length === 0) return false;
-
-  const lastBuy = history.find((d) => String(d.action || '').toUpperCase() === 'BUY');
-  if (!lastBuy?.timestamp) return false;
-
-  const createdAt = new Date(lastBuy.timestamp);
-  if (!Number.isFinite(createdAt.getTime())) return false;
-
-  const ageMs = Date.now() - createdAt.getTime();
-  return ageMs >= 0 && ageMs < (Number(hoursWindow) || 6) * 60 * 60 * 1000;
-}
-
-function buildRiskFactors({ crossTf, higherTf, indicators, priceNarrative, cryptoPercentage }) {
-  const list = [];
-  const higherTfBearishCount = toNumber(higherTf?.bearishCount, 0);
-  const higherTfBullishCount = toNumber(higherTf?.bullishCount, 0);
-
-  const crossTfConflict = crossTf?.gate === false;
-  const higherTfSell = higherTf?.suggestion === 'SELL_SIGNAL' || higherTfBearishCount > higherTfBullishCount;
-  const priceBelowEma12 = toNumber(indicators?.currentPrice, 0) > 0 && toNumber(indicators?.ema12, 0) > 0
-    ? Number(indicators.currentPrice) < Number(indicators.ema12)
-    : false;
-  const priceBelowEma26 = toNumber(indicators?.currentPrice, 0) > 0 && toNumber(indicators?.ema26, 0) > 0
-    ? Number(indicators.currentPrice) < Number(indicators.ema26)
-    : false;
-  const macdWeak = resolveMacdHistogram(indicators) < 0;
-  const baseTfSellSignal = indicators?.confluence?.suggestion === 'SELL_SIGNAL';
-  const lowVolume = indicators?.volumeContext?.volume_quality === 'low';
-  const bearishVolumeDivergence = indicators?.volumeContext?.price_vol_divergence === 'bearish_divergence';
-  const momentumFading = toNumber(priceNarrative?.momentumShiftPct, 0) < 0;
-  const bearishPattern = BEARISH_PATTERNS.has(String(priceNarrative?.detectedPattern || ''));
-  const highCryptoExposure = cryptoPercentage > 70;
-
-  if (crossTfConflict) list.push('cross_tf_conflict');
-  if (higherTfSell) list.push('higher_tf_sell');
-  if (priceBelowEma12) list.push('price_below_ema12');
-  if (priceBelowEma26) list.push('price_below_ema26');
-  if (macdWeak) list.push('macd_weak_or_negative');
-  if (baseTfSellSignal) list.push('base_tf_sell_signal');
-  if (lowVolume) list.push('low_volume');
-  if (bearishVolumeDivergence) list.push('bearish_volume_divergence');
-  if (momentumFading) list.push('momentum_fading');
-  if (bearishPattern) list.push('bearish_price_pattern');
-  if (highCryptoExposure) list.push('high_crypto_exposure');
-
-  return {
-    list,
-    higherTfSell,
-    baseTfSell: baseTfSellSignal,
-    crossTfConflict,
-    priceBelowEma12,
-    macdWeak,
-    strongInvalidation:
-      list.length >= 4 &&
-      (higherTfSell || crossTfConflict) &&
-      (priceBelowEma12 || macdWeak)
-  };
-}
-
-function getDefensiveSellCandidate({ riskFacts, currentRoi, maxRoiSeen, lifecyclePhase, isRecentBuy }) {
-  if (isRecentBuy) {
-    if (currentRoi <= -1.5 && riskFacts.list.length >= 5 && riskFacts.higherTfSell && riskFacts.baseTfSell) {
-      return {
-        positionPctMin: 80,
-        positionPctMax: 100,
-        confidenceMin: 78,
-        confidenceMax: 88,
-        defensiveReason: 'EXTREME_INVALIDATION',
-        lifecyclePhase: 'THESIS_INVALIDATION'
-      };
-    }
-    return null;
-  }
-
-  if (riskFacts.strongInvalidation) {
-    return {
-      positionPctMin: 80,
-      positionPctMax: 100,
-      confidenceMin: 78,
-      confidenceMax: 88,
-      defensiveReason: 'THESIS_INVALIDATION',
-      lifecyclePhase: 'THESIS_INVALIDATION'
-    };
-  }
-
-  if (maxRoiSeen >= 2.0 && currentRoi <= 0) {
-    return {
-      positionPctMin: 70,
-      positionPctMax: 100,
-      confidenceMin: 78,
-      confidenceMax: 88,
-      defensiveReason: 'PROFIT_TO_LOSS_PREVENTION',
-      lifecyclePhase: 'PROFIT_RETRACEMENT'
-    };
-  }
-
-  if (maxRoiSeen >= 2.0 && currentRoi <= 0.7) {
-    return {
-      positionPctMin: 50,
-      positionPctMax: 70,
-      confidenceMin: 72,
-      confidenceMax: 82,
-      defensiveReason: 'PROFIT_RETRACEMENT',
-      lifecyclePhase: 'PROFIT_RETRACEMENT'
-    };
-  }
-
-  if (currentRoi >= 1.2 && riskFacts.list.length >= 2) {
-    return {
-      positionPctMin: 25,
-      positionPctMax: 35,
-      confidenceMin: 62,
-      confidenceMax: 70,
-      defensiveReason: 'PROFIT_PROTECTION',
-      lifecyclePhase: 'PROTECTING_PROFIT'
-    };
-  }
-
-  if (currentRoi <= 0 && currentRoi > -1.0) {
-    if (riskFacts.list.length >= 4 && riskFacts.baseTfSell) {
-      return {
-        positionPctMin: 20,
-        positionPctMax: 35,
-        confidenceMin: 68,
-        confidenceMax: 78,
-        defensiveReason: 'EARLY_DRAWDOWN_REDUCTION',
-        lifecyclePhase: 'IN_DRAWDOWN'
-      };
-    }
-  }
-
-  if (currentRoi <= -1.0 && currentRoi > -1.8) {
-    if (riskFacts.list.length >= 3) {
-      return {
-        positionPctMin: 25,
-        positionPctMax: 50,
-        confidenceMin: 65,
-        confidenceMax: 75,
-        defensiveReason: 'PRE_STOP_LOSS_RISK_REDUCTION',
-        lifecyclePhase: 'IN_DRAWDOWN'
-      };
-    }
-  }
-
-  return null;
-}
 
 function buildDefensiveSell(originalDecision, candidate, contextFacts, forceRange = null) {
   const minPct = forceRange?.minPct ?? candidate.positionPctMin;
@@ -418,35 +283,11 @@ function buildDefensiveSell(originalDecision, candidate, contextFacts, forceRang
     lifecyclePhase: candidate.lifecyclePhase,
   };
 
-  next = normalizeSellForDust(next, contextFacts);
-
   return {
     ...next,
     reasoning: buildDefensiveReasoning(next, contextFacts),
     summaryReasoning: buildDefensiveSummary(candidate.defensiveReason, next.positionPct)
   };
-}
-
-function normalizeSellForDust(decision, contextFacts) {
-  const minOrderUsd = toNumber(contextFacts?.minOrderUsd, 0);
-  const estimatedUsdValue = toNumber(contextFacts?.estimatedUsdValue, 0);
-
-  if (String(decision?.action || '').toUpperCase() !== 'SELL') return decision;
-  if (minOrderUsd <= 0 || estimatedUsdValue <= 0) return decision;
-
-  const pct = normalizePct(decision.positionPct);
-  if (pct <= 0) return decision;
-
-  const remainingUsd = estimatedUsdValue * (1 - (pct / 100));
-  if (remainingUsd > 0 && remainingUsd < minOrderUsd) {
-    return {
-      ...decision,
-      positionPct: 100,
-      summaryReasoning: 'SELL completo para evitar remanente no operable'
-    };
-  }
-
-  return decision;
 }
 
 function buildDefensiveReasoning(decision, contextFacts) {
@@ -490,18 +331,6 @@ function buildHoldOverride(originalDecision, { summary, reasoning }) {
     reasoning,
     summaryReasoning: summary || 'HOLD por gestion de riesgo'
   };
-}
-
-function buildResidualHoldReasoning(contextFacts) {
-  const valueTxt = formatUsd(contextFacts.estimatedUsdValue);
-  const minTxt = formatUsd(contextFacts.minOrderUsd);
-  const riskPart = buildRiskFactorsSentence(contextFacts.riskFactors);
-
-  return [
-    `HOLD: la posicion residual (${valueTxt}) esta por debajo del minimo operable (${minTxt}).`,
-    'Se evita lanzar ventas defensivas repetidas sobre una cantidad no ejecutable, salvo salidas forzadas (STOP_LOSS/TAKE_PROFIT).',
-    riskPart
-  ].filter(Boolean).join(' ');
 }
 
 function buildHoldCooldownReasoning(contextFacts, mode) {
@@ -611,17 +440,12 @@ function buildRiskFactorsSentence(riskFactors) {
 
 function buildSizingSentence(contextFacts, sellPct) {
   const estimatedUsd = toNumber(contextFacts.estimatedUsdValue, null);
-  const minOrderUsd = toNumber(contextFacts.minOrderUsd, null);
   if (estimatedUsd === null || estimatedUsd <= 0) return null;
 
   const soldUsd = estimatedUsd * (sellPct / 100);
   const remainUsd = Math.max(0, estimatedUsd - soldUsd);
 
-  const dustNote = (minOrderUsd !== null && minOrderUsd > 0 && remainUsd > 0 && remainUsd < minOrderUsd)
-    ? ' Se ajusta salida completa para no dejar remanente no operable.'
-    : '';
-
-  return `Dimensionamiento: posicion estimada ${formatUsd(estimatedUsd)}, venta prevista ~${formatUsd(soldUsd)}, remanente ~${formatUsd(remainUsd)}.${dustNote}`;
+  return `Dimensionamiento: posicion estimada ${formatUsd(estimatedUsd)}, venta prevista ~${formatUsd(soldUsd)}, remanente ~${formatUsd(remainUsd)}.`;
 }
 
 function buildDefensiveSummary(defensiveReason, pct) {
@@ -636,6 +460,40 @@ function buildDefensiveSummary(defensiveReason, pct) {
   };
   const label = map[defensiveReason] || 'riesgo elevado';
   return `SELL defensivo ${Math.round(normalizePct(pct))}% por ${label}`;
+}
+
+function enforceSellAllResidualDust(decision, contextFacts) {
+  if (String(decision?.action || '').toUpperCase() !== 'SELL') return decision;
+
+  const currentPct = normalizeSellRisk(decision?.positionPct);
+  if (currentPct <= 0 || currentPct >= 100) {
+    return { ...decision, positionPct: currentPct };
+  }
+
+  const estimatedUsd = toNumber(contextFacts?.estimatedUsdValue, 0);
+  const thresholdUsd = toNumber(contextFacts?.sellAllResidualUsdThreshold, 4);
+  if (!(estimatedUsd > 0) || !(thresholdUsd > 0)) {
+    return { ...decision, positionPct: currentPct };
+  }
+
+  const residualUsd = Math.max(0, estimatedUsd * (1 - (currentPct / 100)));
+  if (!(residualUsd > 0) || residualUsd >= thresholdUsd) {
+    return { ...decision, positionPct: currentPct };
+  }
+
+  const thresholdTxt = formatUsd(thresholdUsd);
+  const residualTxt = formatUsd(residualUsd);
+  const note = `Ajuste de ejecucion: se eleva a SELL 100% para evitar remanente no operable (${residualTxt} < ${thresholdTxt}).`;
+  const nextSummary = decision?.summaryReasoning
+    ? `${decision.summaryReasoning} | SELL 100% para evitar residual no operable (< ${thresholdTxt})`
+    : `SELL 100% para evitar residual no operable (< ${thresholdTxt})`;
+
+  return {
+    ...decision,
+    positionPct: 100,
+    reasoning: [decision?.reasoning, note].filter(Boolean).join(' '),
+    summaryReasoning: nextSummary
+  };
 }
 
 function annotateDecision(decision, contextFacts) {
@@ -657,19 +515,6 @@ function isExceptionalSellDuringCooldown(contextFacts, riskFacts) {
     riskFacts?.strongInvalidation &&
     ((toNumber(contextFacts?.currentRoi, 0) <= -1.5) || (Array.isArray(riskFacts?.list) && riskFacts.list.length >= 6))
   );
-}
-
-function isFutureDate(dateObj) {
-  if (!(dateObj instanceof Date)) return false;
-  return Number.isFinite(dateObj.getTime()) && dateObj.getTime() > Date.now();
-}
-
-function isRecentDate(value, hoursWindow = 6) {
-  if (!value) return false;
-  const d = new Date(value);
-  if (!Number.isFinite(d.getTime())) return false;
-  const delta = Date.now() - d.getTime();
-  return delta >= 0 && delta < (Number(hoursWindow) || 6) * 60 * 60 * 1000;
 }
 
 function resolveMacdHistogram(indicators) {
@@ -716,6 +561,12 @@ function normalizePct(rawValue) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function resolveSellAllResidualUsdThreshold(config) {
+  const n = Number(config?.trading?.sellAllResidualUsdThreshold ?? 4);
+  if (!Number.isFinite(n) || n <= 0) return 4;
+  return n;
 }
 
 export function logPortfolioOverride(symbol, previousDecision, nextDecision) {

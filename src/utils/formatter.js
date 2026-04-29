@@ -136,14 +136,14 @@ export function formatStatsMessage({ stats, performance, invested, openPositions
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
   msg += `🤔 <b>Decisiones:</b> ${stats.totalDecisions}\n`;
   msg += `📦 <b>Órdenes:</b> ${stats.totalOrders} (🛒 ${stats.totalBuys} | 🤝 ${stats.totalSells})\n`;
-  msg += `⚙️ <b>Eficiencia:</b> ${stats.executionRatio}%\n\n`;
+  msg += `⚙️ <b>Eficiencia:</b> ${formatPercentValue(stats.executionRatio)}\n\n`;
 
   msg += `💰 <b>RENDIMIENTO REALIZADO</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
   msg += `💵 <b>PnL:</b> ${performance.pnlUsd} USD\n`;
-  msg += `📈 <b>ROI:</b> ${performance.roi}% \n`;
+  msg += `📈 <b>ROI:</b> ${formatPercentValue(performance.roi)} \n`;
   msg += `💹 <b>Inversión:</b> $${invested}\n`;
-  msg += `⚪ <b>Rendimiento:</b> ${performance.totalRendimiento}%\n\n`;
+  msg += `⚪ <b>Rendimiento historico total:</b> ${formatPercentValue(performance.totalRendimiento)}\n\n`;
 
   msg += `🏆 <b>RÉCORD</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
@@ -319,6 +319,15 @@ export function CronParse(expr) {
   return expr;
 }
 
+function formatPercentValue(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '0%';
+  if (raw.endsWith('%')) return raw;
+
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return `${raw}%`;
+  return `${n}%`;
+}
 export function escapeHTML(str) {
   if (!str) return '';
   return String(str)
