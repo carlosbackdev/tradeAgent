@@ -3,6 +3,7 @@
  */
 
 import { config } from '../../config/config.js';
+import { buildEntryRiskFactors, buildEntrySupportFactors } from './entry-factors.js';
 
 export function buildAnalyzerMessage(context, question = '', tradingConfig = null, coin = null) {
   const activeTradingConfig = tradingConfig || config.trading;
@@ -16,6 +17,44 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
   const marketBySymbol = buildMarketBySymbol(marketData);
   const recentMarketContextBySymbol = buildRecentMarketContextBySymbol(marketData);
 
+  const normalizedPositionLifecycle = {};
+  const entryRiskFactorsBySymbol = {};
+
+  for (const [sym, lc] of Object.entries(context.positionLifecycle || {})) {
+    const qty = Number(lc?.total_qty || 0);
+    const estimatedUsdValue = Number(lc?.estimated_usd_value || 0);
+    const hasOpenPosition = qty > 0 && estimatedUsdValue > 0;
+
+    normalizedPositionLifecycle[sym] = hasOpenPosition ? {
+      ...lc,
+      positionRiskFactors: lc.risk_factors || []
+    } : {
+      ...lc,
+      active: false,
+      phase: 'NO_POSITION',
+      current_roi_pct: 0,
+      max_unrealized_roi_pct: 0,
+      profit_retracement_pct: 0,
+      total_qty: 0,
+      avg_entry_price: 0,
+      estimated_usd_value: 0,
+      risk_factors: [],
+      positionRiskFactors: []
+    };
+  }
+
+  const entrySupportFactorsBySymbol = {};
+  for (const sym of Object.keys(normalizedIndicatorsBySymbol)) {
+    entryRiskFactorsBySymbol[sym] = buildEntryRiskFactors({
+      indicators: normalizedIndicatorsBySymbol[sym],
+      crossTfConfluence: context.crossTfConfluence?.[sym]
+    });
+    entrySupportFactorsBySymbol[sym] = buildEntrySupportFactors({
+      indicators: normalizedIndicatorsBySymbol[sym],
+      crossTfConfluence: context.crossTfConfluence?.[sym]
+    });
+  }
+
   const analysisData = {
     timestamp: new Date().toISOString(),
     symbol: coin,
@@ -27,7 +66,7 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
     botState: {
       openLots: context.openLots || [],
       rendimiento: context.rendimiento !== undefined ? context.rendimiento : null,
-      positionLifecycle: context.positionLifecycle || {},
+      positionLifecycle: normalizedPositionLifecycle,
       otherOpenPositions: context.otherOpenPositions || [],
       totalManagedOpenPositions: context.totalManagedOpenPositions ?? 0,
       totalManagedCryptoUsd: context.totalManagedCryptoUsd ?? 0,
@@ -47,10 +86,12 @@ export function buildAnalyzerMessage(context, question = '', tradingConfig = nul
       indicators: normalizedIndicatorsBySymbol,
       higherTimeframe: context.higherTimeframe || null,
       crossTfConfluence: context.crossTfConfluence || null,
+      entryRiskFactors: entryRiskFactorsBySymbol,
+      entrySupportFactors: entrySupportFactorsBySymbol,
       regimeSummary: regimeSummaryBySymbol,
       atrContext: atrBySymbol,
       recentMarketContext: recentMarketContextBySymbol,
-      positionLifecycle: context.positionLifecycle || {},
+      positionLifecycle: normalizedPositionLifecycle,
       previousDecisions: context.previousDecisions || {},
       priceChangeSinceLastAnalysisPct: context.priceChangeSinceLastAnalysisPct ?? 0,
       currentPrice: context.currentPrice ?? null,
@@ -161,4 +202,4 @@ function parsePercent(value) {
   const clean = String(value).replace('%', '');
   const n = Number(clean);
   return Number.isFinite(n) ? n : null;
-}
+}

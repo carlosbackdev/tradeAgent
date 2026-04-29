@@ -46,6 +46,8 @@ decisionContext: Technical + contextual analysis
 - recentMarketContext: Candle history and timeframe data
 - higherTimeframe: Macro trend context (optional)
 - crossTfConfluence: Cross timeframe gate and conflict diagnostics
+- entryRiskFactors: Pre-calculated technical risk flags (e.g., cross_tf_ema_conflict, rsi_overbought, low_volume)
+- entrySupportFactors: Pre-calculated technical support flags (e.g., macd_positive, ema_golden_cross, obv_accumulation)
 - previousDecisions: Recent decision history to avoid flip-flopping
 
 Portfolio management philosophy:
