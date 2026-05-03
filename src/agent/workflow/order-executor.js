@@ -18,11 +18,9 @@ import { handleForcedExit } from './forced-exit.js';
 import { buildExecutableOrderSize } from './sizing/order-sizing.js';
 import { buildExecutionNotificationPayload } from './report/trading-report.js';
 import {
-  isBlockedHoldDecision,
   isExchangeRejectionError,
   notifyDefensiveSell,
-  notifyExchangeRejection,
-  notifyHoldBlocked
+  notifyExchangeRejection
 } from './report/risk-alerts.js';
 
 export async function executeDecisions(
@@ -33,7 +31,7 @@ export async function executeDecisions(
   realAvailableBalances,
   indicators,
   config,
-  historicalRendimiento = null,
+  symbolRendimiento = null,
   dbConnected = false,
   chatId = null,
   managedPositions = []
@@ -45,6 +43,7 @@ export async function executeDecisions(
 
   const holdThreshold = getHoldConfidenceThreshold(config.trading?.personalityAgent);
   const maxTradeSizePct = normalizeMaxTradeSizePct(config.trading?.maxTradeSize);
+  const normalizedRendimiento = Number.isFinite(Number(symbolRendimiento)) ? Number(symbolRendimiento) : null;
 
   const { RevolutClient } = await import('../../revolut/client.js');
   const client = new RevolutClient(config);
@@ -54,16 +53,13 @@ export async function executeDecisions(
     if (!d?.symbol) continue;
 
     if (String(d.action).toUpperCase() === 'HOLD') {
-      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'skipped', reason: 'HOLD decision' });
-      if (isBlockedHoldDecision(d)) {
-        await notifyHoldBlocked(d, chatId).catch(() => { });
-      }
+      execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'skipped', reason: 'HOLD decision' });
       skippedCount++;
       continue;
     }
 
     if (Number(d.confidence || 0) < holdThreshold) {
-      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
+      execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
       skippedCount++;
       continue;
     }
@@ -80,7 +76,7 @@ export async function executeDecisions(
         maxTradeSizePct
       });
     } catch (err) {
-      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'error', error: err.message });
+      execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'error', error: err.message });
       errorCount++;
       logger.error(`Order sizing failed for ${d.symbol}: ${err.message}`);
       continue;
@@ -116,7 +112,7 @@ export async function executeDecisions(
       if (d.usdAmount > usdAvailable + 0.01) {
         execResults.push({
           ...d,
-          rendimiento: historicalRendimiento,
+          rendimiento: normalizedRendimiento,
           status: 'skipped',
           reason: `Insufficient available USD ($${usdAvailable.toFixed(2)}) after open BUY limits`
         });
@@ -133,7 +129,7 @@ export async function executeDecisions(
       if (baseNeeded > 0 && baseNeeded > sellableCrypto + 0.00000001) {
         execResults.push({
           ...d,
-          rendimiento: historicalRendimiento,
+          rendimiento: normalizedRendimiento,
           status: 'skipped',
           reason: `Insufficient available ${baseCurrency} (${sellableCrypto.toFixed(8)}) after open SELL limits`
         });
@@ -153,7 +149,7 @@ export async function executeDecisions(
     });
 
     if (forcedResult.shouldSkip) {
-      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'skipped', reason: forcedResult.reason });
+      execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'skipped', reason: forcedResult.reason });
       skippedCount++;
       continue;
     }
@@ -164,7 +160,7 @@ export async function executeDecisions(
     if (String(d.action).toUpperCase() === 'BUY' && (!Number.isFinite(usd) || usd < minOrder)) {
       execResults.push({
         ...d,
-        rendimiento: historicalRendimiento,
+        rendimiento: normalizedRendimiento,
         status: 'skipped',
         reason: `Amount $${usd} < minimum $${minOrder}`
       });
@@ -204,7 +200,7 @@ export async function executeDecisions(
         stopLoss: d.stopLoss
       });
 
-      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
+      execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'executed', usdAmount: usd, orderResult, rrMetrics });
       executedCount++;
 
       if (d.defensive === true && String(d.action).toUpperCase() === 'SELL') {
@@ -225,7 +221,7 @@ export async function executeDecisions(
 
       if (dbConnected && orderResult) {
         try {
-          let orderRendimiento = Number.isFinite(Number(historicalRendimiento)) ? Number(historicalRendimiento) : null;
+          let orderRendimiento = normalizedRendimiento;
           let realizedPnlUsd = null;
           let realizedRoiPct = null;
           let fifoMatches = null;
@@ -323,7 +319,7 @@ export async function executeDecisions(
         }
       }
     } catch (err) {
-      execResults.push({ ...d, rendimiento: historicalRendimiento, status: 'error', error: err.message });
+      execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'error', error: err.message });
       errorCount++;
       logger.error(`${d.symbol}: ${err.message}`);
       if (isExchangeRejectionError(err.message)) {

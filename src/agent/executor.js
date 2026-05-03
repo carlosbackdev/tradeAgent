@@ -384,7 +384,7 @@ export async function runAgentCycle(triggerReason = 'cron', coin, question = '',
       realAvailableBalances,
       indicators,
       effectiveConfig,
-      historicalRendimiento,
+      positionRendimiento,
       dbConnected,
       chatId,
       analyzerContext.tradingStats?.openPositions || []
