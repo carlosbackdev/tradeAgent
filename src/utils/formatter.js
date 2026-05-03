@@ -56,7 +56,7 @@ export function formatDecision({ decision, execResults, elapsed, triggerReason }
       msg += `\n💡 <b>RAZONAMIENTO</b>\n`;
       msg += `<pre>${escapeHTML(result.reasoning)}</pre>\n`;
       if (result.risks && String(result.risks).trim()) {
-        msg += `🛡️ <b>RIESGOS</b>\n`;
+        msg += `\n🛡️ <b>RIESGOS</b>\n`;
         msg += `<code>${escapeHTML(String(result.risks).trim())}</code>\n`;
       }
       msg += `━━━━━━━━━━━━━━━━━━━━\n`;
