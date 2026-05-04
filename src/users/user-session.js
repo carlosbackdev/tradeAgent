@@ -94,7 +94,11 @@ export class UserSession {
   // ── Config management ──────────────────────────────────────────
 
   updateConfig(key, value) {
-    const normalizedValue = typeof value === 'string' ? value.trim() : value;
+    let normalizedValue = typeof value === 'string' ? value.trim() : value;
+    if (key === 'AGENT_POLICY_PRESET') {
+      const normalizedPolicy = String(normalizedValue || '').trim();
+      normalizedValue = (!normalizedPolicy || normalizedPolicy === 'null') ? null : normalizedPolicy;
+    }
 
     // Validate any API key (generic or provider-specific)
     if (key === 'AI_PROVIDER_API_KEY' || key === 'ANTHROPIC_API_KEY' || key.startsWith('AI_PROVIDER_API_KEY_')) {
@@ -133,8 +137,7 @@ export class UserSession {
     } else if (key === 'PERSONALITY_AGENT') {
       this.userConfig.trading.personalityAgent = value;
     } else if (key === 'AGENT_POLICY_PRESET') {
-      const normalized = String(value || '').trim();
-      this.userConfig.trading.agentPolicyPreset = (!normalized || normalized === 'null') ? null : normalized;
+      this.userConfig.trading.agentPolicyPreset = normalizedValue;
     } else if (key === 'INDICATORS_CANDLES_INTERVAL') {
       this.userConfig.indicators.candlesInterval = parseNum(value, 15);
     } else if (key === 'AI_MODEL') {

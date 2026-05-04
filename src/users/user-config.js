@@ -123,7 +123,7 @@ export function buildUserConfig(user) {
         'AI_PROVIDER': process.env.AI_PROVIDER || 'anthropic',
         'VISION_AGENT': process.env.VISION_AGENT || 'short',
         'PERSONALITY_AGENT': process.env.PERSONALITY_AGENT || 'moderate',
-        'AGENT_POLICY_PRESET': process.env.AGENT_POLICY_PRESET || '',
+        'AGENT_POLICY_PRESET': '',
         'TRADING_PAIRS': process.env.TRADING_PAIRS || 'BTC-USD',
         'MAX_TRADE_SIZE': process.env.MAX_TRADE_SIZE || '10',
         'MIN_ORDER': process.env.MIN_ORDER || '50',
