@@ -4,6 +4,7 @@
  */
 
 import { isFallbackChainEnabled, getFallbackChain } from '../agent/services/fallback-chain.js';
+import { resolveAgentPolicy } from '../agent/policies/agent-policy-presets.js';
 
 const TOTAL_STEPS = 5;
 
@@ -257,6 +258,7 @@ export function formatHelpMessage(isAdmin) {
 export function formatAgentStatusMessage({ uConfig, cronSt, mode }) {
   const parseCron = CronParse(cronSt.schedule);
   const pairs = uConfig.trading.pairs || [];
+  const policy = resolveAgentPolicy(uConfig.trading);
 
   let msg = `═══ 📊 <b>ESTADO DEL AGENTE</b> ═══\n\n`;
 
@@ -266,6 +268,16 @@ export function formatAgentStatusMessage({ uConfig, cronSt, mode }) {
   msg += `🧐 <b>Estrategia:</b> <code>${uConfig.trading.personalityAgent}</code>\n`;
   msg += `🔮 <b>Visión:</b> <code>${uConfig.trading.visionAgent}</code>\n`;
   msg += `🕯️ <b>Velas a:</b> <code>${uConfig.indicators.candlesInterval} min</code>\n\n`;
+  if (policy) {
+    msg += `🤖 <b>Policy:</b> ${policy.emoji} ${policy.name}\n`;
+    const higher = Number.isFinite(Number(policy.higherInterval)) ? ` + ${formatInterval(policy.higherInterval)}` : '';
+    msg += `🕯️ <b>Velas:</b> <code>${formatInterval(policy.baseInterval)}${higher}</code>\n`;
+    msg += `🎯 <b>Horizonte:</b> ${policy.horizon}\n\n`;
+    msg += `💰 <b>Min SELL profit:</b> +${Number(policy.minProfitToSellPct || 0).toFixed(2)}%\n`;
+    msg += `🛡️ <b>Defensive SELL:</b> max ${Number(policy.maxDefensiveSellPct || 0).toFixed(0)}%\n\n`;
+  } else {
+    msg += `🤖 <b>Policy:</b> Legacy config\n\n`;
+  }
 
   msg += `💰 <b>GESTIÓN DE RIESGO</b>\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━\n`;
@@ -331,6 +343,18 @@ function formatPercentValue(value) {
   const n = Number(raw);
   if (!Number.isFinite(n)) return `${raw}%`;
   return `${n}%`;
+}
+
+function formatInterval(minutes) {
+  const n = Number(minutes);
+  if (!Number.isFinite(n) || n <= 0) return 'n/a';
+  if (n === 1440) return '1D';
+  if (n === 240) return '4H';
+  if (n === 60) return '1H';
+  if (n === 30) return '30m';
+  if (n === 15) return '15m';
+  if (n === 5) return '5m';
+  return `${n}m`;
 }
 export function escapeHTML(str) {
   if (!str) return '';

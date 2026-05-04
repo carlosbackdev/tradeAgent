@@ -5,6 +5,7 @@
 
 import { saveDecision } from './mongo-service.js';
 import { logger } from '../../utils/logger.js';
+import { resolveEffectiveTpSl } from '../../agent/policies/effective-trading-config.js';
 
 export class DecisionPersistenceService {
   static async saveCycleDecisions({
@@ -29,8 +30,7 @@ export class DecisionPersistenceService {
       const currentPrice = indicators[symbolForPrice]?.currentPrice;
 
       if (currentPrice && d.action !== 'HOLD') {
-        const tpPct = effectiveConfig?.trading?.takeProfitPct || 0;
-        const slPct = effectiveConfig?.trading?.stopLossPct || 0;
+        const { takeProfitPct: tpPct, stopLossPct: slPct } = resolveEffectiveTpSl(effectiveConfig?.trading);
 
         if (d.action === 'BUY') {
           if (tpPct > 0) d.takeProfit = (currentPrice * (1 + tpPct / 100)).toFixed(2);

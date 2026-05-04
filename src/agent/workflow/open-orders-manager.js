@@ -7,6 +7,7 @@ import { logger } from '../../utils/logger.js';
 import { saveOrder, saveDecision, markOrderCancelled } from '../../services/mongo/mongo-service.js';
 import { analyzeOpenOrderWithAi } from '../context/open-order-analyzer.js';
 import { OrderManager } from '../../revolut/orders.js';
+import { resolveEffectiveTpSl } from '../policies/effective-trading-config.js';
 
 /**
  * Fetch pending (open) orders for a specific symbol from Revolut API
@@ -192,8 +193,7 @@ export async function processOpenOrders(
             const buyAmount = Number(buyQuantity) * Number(currentPrice);
 
             // ── Auto-calculate TP/SL for BUY_MORE (consistent with main executor) ──
-            const tpPct = tradingConfig.takeProfitPct || 0;
-            const slPct = tradingConfig.stopLossPct || 0;
+            const { takeProfitPct: tpPct, stopLossPct: slPct } = resolveEffectiveTpSl(tradingConfig);
             let tpPrice = null;
             let slPrice = null;
 

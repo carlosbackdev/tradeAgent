@@ -45,7 +45,12 @@ export function evaluateLifecycleState({
   );
 
   const stopLossPct = Number(config?.trading?.stopLossPct || 2.5);
-  const minHoldMinutes = Number(config?.trading?.minHoldMinutesAfterBuy || 240);
+  const policy = resolveAgentPolicy(config?.trading);
+  const minHoldMinutes = Number(
+    policy?.minHoldMinutesAfterBuy ??
+    config?.trading?.minHoldMinutesAfterBuy ??
+    240
+  );
   const ageMinutes = getLastBuyAgeMinutes(positionSummary, analyzerContext?.previousDecisions, normalizedSymbol);
   const isRecentBuy = ageMinutes !== null && ageMinutes < minHoldMinutes;
 
@@ -125,4 +130,4 @@ function toNumber(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
-
+import { resolveAgentPolicy } from '../../policies/agent-policy-presets.js';

@@ -132,6 +132,9 @@ export class UserSession {
       this.userConfig.trading.visionAgent = value;
     } else if (key === 'PERSONALITY_AGENT') {
       this.userConfig.trading.personalityAgent = value;
+    } else if (key === 'AGENT_POLICY_PRESET') {
+      const normalized = String(value || '').trim();
+      this.userConfig.trading.agentPolicyPreset = (!normalized || normalized === 'null') ? null : normalized;
     } else if (key === 'INDICATORS_CANDLES_INTERVAL') {
       this.userConfig.indicators.candlesInterval = parseNum(value, 15);
     } else if (key === 'AI_MODEL') {

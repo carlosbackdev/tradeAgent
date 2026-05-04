@@ -12,6 +12,7 @@ import { COINS } from '../agent/entities/coins.js';
 import { AdminHandlers } from './admin/admin-handlers.js';
 import { CallbackHandler } from './response/callback-handler.js';
 import { FallbackChainHandler } from './admin/fallback-chain-handler.js';
+import { AGENT_POLICY_PRESETS, resolveAgentPolicy } from '../agent/policies/agent-policy-presets.js';
 
 // ── Cron presets ──────────────────────────────────────────────────
 // Imported from entities/cronPresets.js
@@ -53,11 +54,12 @@ export class TelegramHandlers {
                     { text: '📈 TRADING STATS', callback_data: '/stats' },
                 ],
                 [
-                    { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
+                    { text: '🧭 PRESETS AGENT', callback_data: '/agent_presets' },
                     { text: '⚙️ API CONFIG', callback_data: '/configuration' },
                     { text: '🔗 FALLBACK CHAIN', callback_data: '/fallback_chain' }
                 ],
                 [
+                    { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
                     { text: '💬 ASK AGENT', callback_data: '/ask' },
                     { text: '❓ HELP', callback_data: '/help' }
                 ]
@@ -97,11 +99,12 @@ export class TelegramHandlers {
                     { text: '📈 TRADING STATS', callback_data: '/stats' },
                 ],
                 [
-                    { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
+                    { text: '🧭 PRESETS AGENT', callback_data: '/agent_presets' },
                     { text: '⚙️ API CONFIG', callback_data: '/configuration' },
                     { text: '🔗 FALLBACK CHAIN', callback_data: '/fallback_chain' }
                 ],
                 [
+                    { text: '🤖 AGENT CONFIG', callback_data: '/agent' },
                     { text: '💬 ASK AGENT', callback_data: '/ask' },
                     { text: '❓ HELP', callback_data: '/help' }
                 ]
@@ -347,6 +350,62 @@ export class TelegramHandlers {
         await this.ctx.sendMessage(text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 ATRÁS', callback_data: '/init' }]] } });
     }
 
+    async handleAgentPresets() {
+        const userCfg = this.ctx.readEnvFile();
+        const activePolicy = resolveAgentPolicy(userCfg.trading);
+        const activeLabel = activePolicy
+            ? `${activePolicy.emoji} ${activePolicy.name}`
+            : 'Configuracion Sin Politica Por Agent Config';
+
+        const presetLines = Object.values(AGENT_POLICY_PRESETS).map((p) => {
+            const personalityLine = p.personalityProfile
+                ? `Personalidad: ${p.personalityProfile}`
+                : null;
+            const visionLine = p.visionProfile
+                ? `Vision: ${p.visionProfile}`
+                : null;
+            return [
+                `<code>${p.emoji} <b>${p.name}</b></code>`,
+                `<pre>${p.description}\n`,
+                personalityLine,
+                visionLine,
+                `BUY: ${p.behavior?.buy || '-'}`,
+                `SELL: ${p.behavior?.sell || '-'}`,
+                `HOLD: ${p.behavior?.hold || '-'}</pre>`
+            ].filter(Boolean).join('\n');
+        }).join('\n\n');
+
+        const msg = [
+            '🤖 <b>AGENT POLICY PRESETS</b>',
+            '',
+            `<code>Activa ahora:</code> <b>${activeLabel}</b>`,
+            '',
+            '<code>POLITICAS:</code>',
+            presetLines,
+            '',
+            '<code>Selecciona una policy activa o vuelve a modo legacy:</code>'
+        ].join('\n');
+
+        await this.ctx.sendMessage(msg, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '⚡ Daily Trader', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:daily_trader' }],
+                    [{ text: '📈 Swing Balanced', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:swing_balanced' }],
+                    [{ text: '🐢 Long Accumulation', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:long_accumulation' }],
+                    [{ text: '🛡️ Capital Protection', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:capital_protection' }],
+                    [{ text: '🔥 Scalp 15m Aggressive', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:scalp_15m_aggressive' }],
+                    [{ text: '⚡ Hourly Aggressive', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:hourly_aggressive' }],
+                    [{ text: '🚀 Daily Weekly Aggressive', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:daily_weekly_aggressive' }],
+                    [{ text: '📊 Daily Weekly 3-5%', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:daily_weekly_balanced_3_5' }],
+                    [{ text: '🎯 Short Term Moderate 30m', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:short_term_moderate_30m' }],
+                    [{ text: 'Desactivar policy / Legacy mode', callback_data: 'SET_AGENT_CFG:AGENT_POLICY_PRESET:null' }],
+                    [{ text: '🔙 ATRÁS', callback_data: '/init' }]
+                ]
+            }
+        });
+    }
+
     async handleConfigInput(text) {
         if (this.configState.isInviting) {
             this.configState.isInviting = false;
@@ -449,7 +508,6 @@ export class TelegramHandlers {
                     });
                     return;
                 }
-
                 if (key === 'AI_PROVIDER') {
                     await this.ctx.sendMessage('🤖 <b>PROVEEDOR DE IA</b>\n\nSelecciona el proveedor que deseas usar:', {
                         parse_mode: 'HTML',

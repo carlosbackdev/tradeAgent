@@ -5,6 +5,7 @@
 
 import { logger } from '../../utils/logger.js';
 import { getOpenPositionSummary } from '../../services/mongo/mongo-service.js';
+import { resolveEffectiveTpSl } from '../policies/effective-trading-config.js';
 
 export async function checkForcedDecisions(indicators, coin, balanceArray, realAvailableBalances, config, dbConnected = false, chatId = null) {
   let forcedDecision = null;
@@ -24,8 +25,7 @@ export async function checkForcedDecisions(indicators, coin, balanceArray, realA
         if (positionSummary.openLots.length > 0) {
           rendimiento = positionSummary.unrealizedRoiPct;
 
-          const tpPct = config.trading.takeProfitPct || 0;
-          const slPct = config.trading.stopLossPct || 0;
+          const { takeProfitPct: tpPct, stopLossPct: slPct } = resolveEffectiveTpSl(config.trading);
           const sellBuffer = Number(config?.trading?.sellSizeBuffer || 0.999);
           const bufferedQty = Math.floor(baseBalance * sellBuffer * 100000000) / 100000000;
           const usdWorth = bufferedQty * currentPrice;

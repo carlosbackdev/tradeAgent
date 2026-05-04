@@ -7,6 +7,7 @@ import { RevolutClient } from '../../revolut/client.js';
 import { MarketData } from '../../revolut/market.js';
 import { logger } from '../../utils/logger.js';
 import { buildRealAvailableBalances } from './available-balance.js';
+import { resolveAgentPolicy } from '../policies/agent-policy-presets.js';
 
 export async function fetchMarketData(coin, config) {
   if (!coin) throw new Error('No trading pair passed to fetchMarketData');
@@ -26,8 +27,9 @@ export async function fetchMarketData(coin, config) {
     1440: null,  // 1 día → no hay superior
   };
 
-  const baseInterval = config.indicators.candlesInterval;
-  const higherInterval = HIGHER_TF_MAP[baseInterval] ?? null;
+  const policy = resolveAgentPolicy(config?.trading);
+  const baseInterval = Number(policy?.baseInterval ?? config.indicators.candlesInterval);
+  const higherInterval = policy ? policy.higherInterval : (HIGHER_TF_MAP[baseInterval] ?? null);
 
   const [balances, openOrders, snapshot, higherTfCandles] = await Promise.all([
     market.getBalances(),

@@ -8,6 +8,7 @@ import { callAgentWithFallback, isFallbackChainEnabled } from '../services/fallb
 import { buildAnalyzerMessage } from '../context/analyzer-market.js';
 import { buildFinalContext } from '../context/formatters/context-summary.js';
 import { logger } from '../../utils/logger.js';
+import { resolveEffectiveTpSl } from '../policies/effective-trading-config.js';
 
 export async function analyzeTradingIntent({
   forcedDecision = null,
@@ -48,11 +49,11 @@ export async function analyzeTradingIntent({
   }
 
   const decisions = Array.isArray(decision?.decisions) ? decision.decisions : [];
+  const { takeProfitPct, stopLossPct } = resolveEffectiveTpSl(effectiveConfig.trading);
   for (const d of decisions) {
-    d.takeProfit = d.takeProfit || effectiveConfig.trading.takeProfitPct;
-    d.stopLoss = d.stopLoss || effectiveConfig.trading.stopLossPct;
+    d.takeProfit = d.takeProfit || takeProfitPct;
+    d.stopLoss = d.stopLoss || stopLossPct;
   }
 
   return decision;
 }
-

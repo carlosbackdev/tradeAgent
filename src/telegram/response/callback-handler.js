@@ -12,6 +12,7 @@ import { runAgentCycle } from '../../agent/executor.js';
 import { CronParse } from '../../utils/formatter.js';
 import { PROVIDER_MODELS } from '../../agent/entities/models.js';
 import { COINS } from '../../agent/entities/coins.js';
+import { resolveAgentPolicy } from '../../agent/policies/agent-policy-presets.js';
 
 export class CallbackHandler {
     /**
@@ -38,6 +39,7 @@ export class CallbackHandler {
             if (data === '/cron')          return await this.h.handleCron();
             if (data === '/stats')         return await this.h.handleTradingStats();
             if (data === '/agent')         return await this.h.handleConfigurationAgent();
+            if (data === '/agent_presets') return await this.h.handleAgentPresets();
             if (data === '/ask')           return await this.h.handleAsk();
             if (data === '/admin')         return await this.h.handleAdminMenu();
             if (data === '/users')         return await this.h.handleListUsers();
@@ -156,6 +158,31 @@ export class CallbackHandler {
             const [, key, value] = data.split(':');
             let ok = this.ctx.updateEnvFile(key, value);
 
+            if (ok && key === 'AGENT_POLICY_PRESET') {
+                this.configState.isConfiguring = false;
+                this.configState.selectedKey = null;
+                this.configState.mode = null;
+                const policy = resolveAgentPolicy(this.ctx.readEnvFile().trading);
+                if (policy) {
+                    await this.ctx.editMessage(
+                        messageId,
+                        `✅ <b>Policy actualizada:</b> ${policy.emoji} ${policy.name}\n` +
+                        `Horizonte: ${policy.horizon}\n` +
+                        `Velas base: <code>${formatPolicyInterval(policy.baseInterval)}</code>\n` +
+                        `Ventas: max defensivo ${policy.maxDefensiveSellPct}%\n` +
+                        `Modo: ${policy.profitProtectionMode}`,
+                        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🧭 VOLVER A PRESETS', callback_data: '/agent_presets' }]] } }
+                    );
+                } else {
+                    await this.ctx.editMessage(
+                        messageId,
+                        '✅ <b>Policy desactivada</b>\nEl agente usara la configuracion actual basada en vision/personality.',
+                        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🧭 VOLVER A PRESETS', callback_data: '/agent_presets' }]] } }
+                    );
+                }
+                return;
+            }
+
             // When provider changes: reset model + load or request provider-specific API token
             if (ok && key === 'AI_PROVIDER') {
                 const defaultModel = PROVIDER_MODELS[value]?.[0] || '';
@@ -214,4 +241,13 @@ export class CallbackHandler {
             return;
         }
     }
+}
+
+function formatPolicyInterval(minutes) {
+    const n = Number(minutes);
+    if (n === 1440) return '1D';
+    if (n === 240) return '4H';
+    if (n === 60) return '1H';
+    if (n === 30) return '30m';
+    return `${n}m`;
 }

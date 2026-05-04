@@ -14,6 +14,8 @@ import {
   isExtremeInvalidation
 } from './risk/risk-policy.js';
 import { evaluateLifecycleState } from './risk/lifecycle-policy.js';
+import { resolveAgentPolicy } from '../policies/agent-policy-presets.js';
+import { evaluatePolicySellDecision } from '../policies/sell-policy.js';
 
 const RISK_FACTOR_LABELS = {
   cross_tf_conflict: 'conflicto en confluencia multi-timeframe (Cross-TF gate=false)',
@@ -51,6 +53,7 @@ export function applyPortfolioManagerDecision({
 
   const cryptoPercentage = Number(analyzerContext?.balances?.summary?.cryptoPercentage || 0);
   const sellAllResidualUsdThreshold = resolveSellAllResidualUsdThreshold(config);
+  const activePolicy = resolveAgentPolicy(config?.trading);
 
   const lifecycleFacts = evaluateLifecycleState({
     symbol: normalizedSymbol,
@@ -180,6 +183,13 @@ export function applyPortfolioManagerDecision({
   }
 
   if (decisionAction === 'SELL') {
+    if (activePolicy?.id === 'long_accumulation' && !isStrongSellCause({ currentRoi, stopLossPct, riskFacts })) {
+      return annotateDecision(buildHoldOverride(decision, {
+        summary: 'HOLD: long accumulation evita venta impulsiva',
+        reasoning: 'HOLD: policy long_accumulation activa. Se evita SELL sin hard stop, invalidacion extrema o deterioro fuerte.'
+      }), contextFacts);
+    }
+
     const hardStopAllowed = shouldAllowHardStop({ currentRoi, stopLossPct });
     const blockedByRecentBuy = shouldBlockRecentSell({
       isRecentBuy,
@@ -216,7 +226,7 @@ export function applyPortfolioManagerDecision({
         const capped = buildDefensiveSell(decision, defensiveCandidate, contextFacts, {
           minPct: cappedPct,
           maxPct: cappedPct
-        });
+        }, activePolicy);
         return annotateDecision(enforceSellAllResidualDust(capped, contextFacts), contextFacts);
       }
     }
@@ -225,32 +235,56 @@ export function applyPortfolioManagerDecision({
       const upgraded = buildDefensiveSell(decision, defensiveCandidate, contextFacts, {
         minPct: 80,
         maxPct: 100
-      });
+      }, activePolicy);
       return annotateDecision(enforceSellAllResidualDust(upgraded, contextFacts), contextFacts);
     }
 
     const normalizedExistingSell = {
       ...decision,
-      positionPct: normalizeSellRisk(decision.positionPct)
+      positionPct: capPolicyDefensiveSellPct(normalizeSellRisk(decision.positionPct), activePolicy)
     };
-    return annotateDecision(enforceSellAllResidualDust(normalizedExistingSell, contextFacts), contextFacts);
+    const policyAdjustedSell = applyPolicySellRules(normalizedExistingSell, {
+      config,
+      contextFacts,
+      riskFacts,
+      hardStopAllowed,
+      extremeInvalidation,
+      isDefensiveSell: Boolean(normalizedExistingSell.defensive)
+    });
+    return annotateDecision(enforceSellAllResidualDust(policyAdjustedSell, contextFacts), contextFacts);
   }
 
   if (defensiveCandidate) {
     if (decisionAction === 'HOLD') {
       const overridden = enforceSellAllResidualDust(
-        buildDefensiveSell(decision, defensiveCandidate, contextFacts),
+        buildDefensiveSell(decision, defensiveCandidate, contextFacts, null, activePolicy),
         contextFacts
       );
-      return annotateDecision(overridden, contextFacts);
+      const policyAdjusted = applyPolicySellRules(overridden, {
+        config,
+        contextFacts,
+        riskFacts,
+        hardStopAllowed: shouldAllowHardStop({ currentRoi, stopLossPct }),
+        extremeInvalidation,
+        isDefensiveSell: true
+      });
+      return annotateDecision(policyAdjusted, contextFacts);
     }
 
     if (decisionAction === 'BUY' && riskFacts.list.length >= 3) {
       const overridden = enforceSellAllResidualDust(
-        buildDefensiveSell(decision, defensiveCandidate, contextFacts),
+        buildDefensiveSell(decision, defensiveCandidate, contextFacts, null, activePolicy),
         contextFacts
       );
-      return annotateDecision(overridden, contextFacts);
+      const policyAdjusted = applyPolicySellRules(overridden, {
+        config,
+        contextFacts,
+        riskFacts,
+        hardStopAllowed: shouldAllowHardStop({ currentRoi, stopLossPct }),
+        extremeInvalidation,
+        isDefensiveSell: true
+      });
+      return annotateDecision(policyAdjusted, contextFacts);
     }
   }
 
@@ -264,10 +298,50 @@ export function applyPortfolioManagerDecision({
   return annotateDecision(decision, contextFacts);
 }
 
+function applyPolicySellRules(decision, { config, contextFacts, riskFacts, hardStopAllowed, extremeInvalidation, isDefensiveSell }) {
+  if (String(decision?.action || '').toUpperCase() !== 'SELL') return decision;
 
-function buildDefensiveSell(originalDecision, candidate, contextFacts, forceRange = null) {
+  const requestedPct = normalizeSellRisk(decision?.positionPct);
+  const evalResult = evaluatePolicySellDecision({
+    tradingConfig: config?.trading,
+    action: 'SELL',
+    currentRoiPct: toNumber(contextFacts?.currentRoi, 0),
+    requestedPositionPct: requestedPct,
+    isDefensiveSell: Boolean(isDefensiveSell),
+    isHardStop: Boolean(hardStopAllowed),
+    isStopLoss: toNumber(contextFacts?.currentRoi, 0) <= (-1 * toNumber(contextFacts?.stopLossPct, 2.5)),
+    isExtremeInvalidation: Boolean(extremeInvalidation),
+    strongRiskFactors: Array.isArray(riskFacts?.list) ? riskFacts.list : []
+  });
+
+  if (!evalResult.hasPolicy) return decision;
+
+  if (!evalResult.allowed) {
+    const rules = evalResult.rules || {};
+    const roi = toNumber(contextFacts?.currentRoi, 0).toFixed(2);
+    return buildHoldOverride(decision, {
+      summary: `HOLD: policy ${rules.policyName || rules.policyId || ''} bloquea SELL`,
+      reasoning: `HOLD: policy activa bloquea SELL (ROI=${roi}%, reason=${evalResult.reason}).`
+    });
+  }
+
+  const cappedPct = normalizeSellRisk(evalResult.positionPct);
+  if (cappedPct < requestedPct) {
+    return {
+      ...decision,
+      positionPct: cappedPct,
+      summaryReasoning: `${decision?.summaryReasoning || 'SELL'} | capado por policy a ${Math.round(cappedPct)}%`,
+      reasoning: `${decision?.reasoning || ''} SELL ajustado por policy: maximo permitido ${Math.round(cappedPct)}%.`.trim()
+    };
+  }
+
+  return { ...decision, positionPct: cappedPct };
+}
+
+
+function buildDefensiveSell(originalDecision, candidate, contextFacts, forceRange = null, activePolicy = null) {
   const minPct = forceRange?.minPct ?? candidate.positionPctMin;
-  const maxPct = forceRange?.maxPct ?? candidate.positionPctMax;
+  const maxPct = capPolicyDefensiveSellPct(forceRange?.maxPct ?? candidate.positionPctMax, activePolicy);
   const targetPct = Math.round((minPct + maxPct) / 2);
   const targetConfidence = Math.round((candidate.confidenceMin + candidate.confidenceMax) / 2);
 
@@ -288,6 +362,22 @@ function buildDefensiveSell(originalDecision, candidate, contextFacts, forceRang
     reasoning: buildDefensiveReasoning(next, contextFacts),
     summaryReasoning: buildDefensiveSummary(candidate.defensiveReason, next.positionPct)
   };
+}
+
+function capPolicyDefensiveSellPct(value, activePolicy) {
+  const raw = normalizeSellRisk(value);
+  const cap = Number(activePolicy?.maxDefensiveSellPct);
+  if (!Number.isFinite(cap) || cap <= 0 || raw >= 100) return raw;
+  return Math.min(raw, cap);
+}
+
+function isStrongSellCause({ currentRoi, stopLossPct, riskFacts }) {
+  const hardStopAllowed = shouldAllowHardStop({ currentRoi, stopLossPct });
+  return Boolean(
+    hardStopAllowed ||
+    riskFacts?.extremeInvalidation ||
+    riskFacts?.strongInvalidation
+  );
 }
 
 function buildDefensiveReasoning(decision, contextFacts) {

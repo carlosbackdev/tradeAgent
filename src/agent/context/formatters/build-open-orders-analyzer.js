@@ -3,6 +3,7 @@
  * Constructs prompts and context for Model AI to analyze open orders
  * Uses 3-layer structure (exchangeTruth, botState, decisionContext) like main analyzer
  */
+import { resolveEffectiveTpSl } from '../../policies/effective-trading-config.js';
 
 /**
  * Build enriched analysis context for open order (3-layer structure)
@@ -12,6 +13,7 @@
  * @returns {Object} Enriched context for Model AI with 3-layer structure
  */
 export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol, tradingConfig = null) {
+  const { takeProfitPct, stopLossPct } = resolveEffectiveTpSl(tradingConfig || {});
   const normalizedSymbol = normalizeSymbol(symbol);
   const currentPrice = toNumber(
     analyzerContext.currentPrice ||
@@ -80,8 +82,8 @@ export function buildOpenOrderAnalysisContext(openOrder, analyzerContext, symbol
     trading_constraints: {
       MAX_TRADE_SIZE: Number(tradingConfig?.maxTradeSize ?? 25),
       MIN_ORDER: Number(tradingConfig?.minOrderUsd ?? 0),
-      TAKE_PROFIT_PCT: Number(tradingConfig?.takeProfitPct ?? 0),
-      STOP_LOSS_PCT: Number(tradingConfig?.stopLossPct ?? 0),
+      TAKE_PROFIT_PCT: Number(takeProfitPct ?? 0),
+      STOP_LOSS_PCT: Number(stopLossPct ?? 0),
     },
     higherTimeframe: analyzerContext.higherTimeframe || null,
     trading_history: analyzerContext.previousDecisions?.[normalizedSymbol] || analyzerContext.previousDecisions?.[symbol] || [],
@@ -118,6 +120,7 @@ function normalizeSymbol(symbol) {
  * Focused on: 1) The open order state, 2) Current bot position/holdings, 3) Technical decision factors
  */
 export function buildOpenOrderAnalysisMessage(openOrderContext, symbol, tradingConfig = null) {
+  const { takeProfitPct, stopLossPct } = resolveEffectiveTpSl(tradingConfig || {});
   const {
     open_order,
     price_moved_pct,
@@ -188,8 +191,8 @@ export function buildOpenOrderAnalysisMessage(openOrderContext, symbol, tradingC
         CANCEL_IF_CONFLUENCE_FLIPS: true,
         MAX_TRADE_SIZE: Number(trading_constraints?.MAX_TRADE_SIZE ?? tradingConfig?.maxTradeSize ?? 25),
         MIN_ORDER: Number(trading_constraints?.MIN_ORDER ?? tradingConfig?.minOrderUsd ?? 0),
-        TAKE_PROFIT_PCT: Number(trading_constraints?.TAKE_PROFIT_PCT ?? tradingConfig?.takeProfitPct ?? 0),
-        STOP_LOSS_PCT: Number(trading_constraints?.STOP_LOSS_PCT ?? tradingConfig?.stopLossPct ?? 0),
+        TAKE_PROFIT_PCT: Number(trading_constraints?.TAKE_PROFIT_PCT ?? takeProfitPct ?? 0),
+        STOP_LOSS_PCT: Number(trading_constraints?.STOP_LOSS_PCT ?? stopLossPct ?? 0),
       },
     },
 

@@ -5,6 +5,7 @@
 
 import { logger } from '../utils/logger.js';
 import { config } from '../config/config.js';
+import { resolveAgentPolicy } from '../agent/policies/agent-policy-presets.js';
 
 export class MarketData {
   constructor(client) {
@@ -158,10 +159,13 @@ export class MarketData {
   }
 
   async getSnapshot(symbol) {
+    const policy = resolveAgentPolicy(this.client.config?.trading);
+    const baseInterval = Number(policy?.baseInterval ?? this.client.config?.indicators?.candlesInterval ?? 5);
+
     const [ticker, orderBook, candles] = await Promise.all([
       this.getTicker(symbol),
       this.getOrderBook(symbol, 10),
-      this.getCandles(symbol, { interval: this.client.config?.indicators?.candlesInterval || 5 }),
+      this.getCandles(symbol, { interval: baseInterval }),
     ]);
 
     logger.info(`📊 Snapshot loaded: ${symbol} | candles=${candles.candles.length}`);

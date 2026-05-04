@@ -13,7 +13,7 @@ import {
   updatePositionLifecycleState
 } from '../../services/mongo/mongo-service.js';
 import { logger } from '../../utils/logger.js';
-import { getHoldConfidenceThreshold } from '../context/prompts/confidence-threshold.js';
+import { getRequiredConfidenceForAction } from '../context/prompts/confidence-threshold.js';
 import { handleForcedExit } from './forced-exit.js';
 import { buildExecutableOrderSize } from './sizing/order-sizing.js';
 import { buildExecutionNotificationPayload } from './report/trading-report.js';
@@ -41,7 +41,6 @@ export async function executeDecisions(
   let skippedCount = 0;
   let errorCount = 0;
 
-  const holdThreshold = getHoldConfidenceThreshold(config.trading?.personalityAgent);
   const maxTradeSizePct = normalizeMaxTradeSizePct(config.trading?.maxTradeSize);
   const normalizedRendimiento = Number.isFinite(Number(symbolRendimiento)) ? Number(symbolRendimiento) : null;
 
@@ -58,7 +57,8 @@ export async function executeDecisions(
       continue;
     }
 
-    if (Number(d.confidence || 0) < holdThreshold) {
+    const requiredConfidence = getRequiredConfidenceForAction(d.action, config.trading);
+    if (Number(d.confidence || 0) < requiredConfidence) {
       execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'skipped', reason: `Low confidence (${d.confidence}%)` });
       skippedCount++;
       continue;
