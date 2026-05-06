@@ -124,7 +124,19 @@ export async function executeDecisions(
     if (String(d.action).toUpperCase() === 'SELL') {
       const sellableCrypto = Number(sizingPlan?.sellableCrypto || 0);
       const baseNeeded = Number(d.baseAmount || 0);
+      const usdPlanned = Number(d.usdAmount || 0);
       const baseCurrency = sizingPlan?.baseCurrency || d.symbol.replace('/', '-').split('-')[0];
+
+      if (sellableCrypto <= 0 || baseNeeded <= 0 || usdPlanned <= 0) {
+        execResults.push({
+          ...d,
+          rendimiento: normalizedRendimiento,
+          status: 'skipped',
+          reason: `Insufficient available ${baseCurrency} (${sellableCrypto.toFixed(8)}) after open SELL limits`
+        });
+        skippedCount++;
+        continue;
+      }
 
       if (baseNeeded > 0 && baseNeeded > sellableCrypto + 0.00000001) {
         execResults.push({
