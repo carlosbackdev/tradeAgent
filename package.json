@@ -10,6 +10,7 @@
     "trigger": "node src/index.js --trigger manual",
     "gen-keys": "node scripts/generate-keys.js",
     "test:refactor": "node scripts/validate-risk-sizing-refactor.js",
+    "test:forced-sell": "node scripts/validate-forced-sell-flow.js",
     "test:flow": "node test-order-flow.js",
     "verify": "node scripts/verify-setup.js"
   },

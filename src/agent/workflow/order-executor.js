@@ -64,6 +64,13 @@ export async function executeDecisions(
       continue;
     }
 
+    const isForcedExitSell =
+      String(d.action).toUpperCase() === 'SELL' &&
+      (
+        d.forced === true ||
+        (d.confidence === 100 && String(d.reasoning || '').includes('Forced'))
+      );
+
     let sizingPlan;
     try {
       sizingPlan = buildExecutableOrderSize({
@@ -73,7 +80,8 @@ export async function executeDecisions(
         realAvailableBalances,
         indicators,
         managedPositions,
-        maxTradeSizePct
+        maxTradeSizePct,
+        tradingConfig: config?.trading || {}
       });
     } catch (err) {
       execResults.push({ ...d, rendimiento: normalizedRendimiento, status: 'error', error: err.message });
@@ -87,6 +95,13 @@ export async function executeDecisions(
       ? Number(sizingPlan.baseAmount)
       : null;
     d.usdAmount = Number(sizingPlan.usdAmount || 0);
+    const forcedReason = String(d.forcedReason || '').toUpperCase();
+    const baseCurrency = sizingPlan?.baseCurrency || d.symbol.replace('/', '-').split('-')[0];
+    const realHeld = Math.max(
+      0,
+      Number(realAvailableBalances?.availableByCurrency?.[baseCurrency] || 0),
+      Number(realAvailableBalances?.totalsByCurrency?.[baseCurrency] || 0)
+    );
 
     if (String(d.action).toUpperCase() === 'BUY' && d.positionPct > 0) {
       logger.info(
@@ -121,13 +136,13 @@ export async function executeDecisions(
       }
     }
 
-    if (String(d.action).toUpperCase() === 'SELL') {
+    if (String(d.action).toUpperCase() === 'SELL' && !isForcedExitSell) {
       const sellableCrypto = Number(sizingPlan?.sellableCrypto || 0);
       const baseNeeded = Number(d.baseAmount || 0);
       const usdPlanned = Number(d.usdAmount || 0);
-      const baseCurrency = sizingPlan?.baseCurrency || d.symbol.replace('/', '-').split('-')[0];
 
       if (sellableCrypto <= 0 || baseNeeded <= 0 || usdPlanned <= 0) {
+        logSellSizingDebug({ d, sizingPlan, baseCurrency, realAvailableBalances, openOrders });
         execResults.push({
           ...d,
           rendimiento: normalizedRendimiento,
@@ -139,6 +154,7 @@ export async function executeDecisions(
       }
 
       if (baseNeeded > 0 && baseNeeded > sellableCrypto + 0.00000001) {
+        logSellSizingDebug({ d, sizingPlan, baseCurrency, realAvailableBalances, openOrders });
         execResults.push({
           ...d,
           rendimiento: normalizedRendimiento,
@@ -148,6 +164,22 @@ export async function executeDecisions(
         skippedCount++;
         continue;
       }
+    }
+
+    if (String(d.action).toUpperCase() === 'SELL' && isForcedExitSell && realHeld <= 0) {
+      logger.warn(
+        `Forced ${forcedReason || 'SELL'} ${d.symbol} skipped: no real held balance ` +
+        `(available=${Number(realAvailableBalances?.availableByCurrency?.[baseCurrency] || 0).toFixed(8)}, ` +
+        `total=${Number(realAvailableBalances?.totalsByCurrency?.[baseCurrency] || 0).toFixed(8)})`
+      );
+      execResults.push({
+        ...d,
+        rendimiento: normalizedRendimiento,
+        status: 'skipped',
+        reason: `Forced ${forcedReason || 'SELL'} skipped: real balance ${baseCurrency}=0`
+      });
+      skippedCount++;
+      continue;
     }
 
     const forcedResult = await handleForcedExit(d, {
@@ -349,4 +381,24 @@ function normalizeMaxTradeSizePct(rawValue) {
   if (!Number.isFinite(n) || n <= 0) return 25;
   if (n > 0 && n <= 1) return n * 100;
   return n;
+}
+
+function logSellSizingDebug({ d, sizingPlan, baseCurrency, realAvailableBalances, openOrders }) {
+  const normalizedSymbol = String(d?.symbol || '').replace('/', '-').toUpperCase();
+  const symbolOpenOrders = (Array.isArray(openOrders) ? openOrders : []).filter((o) => {
+    const s = String(o?.symbol || o?.instrument || '').replace('/', '-').toUpperCase();
+    return s === normalizedSymbol;
+  });
+
+  logger.warn(
+    `SELL sizing debug ${normalizedSymbol}: action=${String(d?.action || '').toUpperCase()} ` +
+    `forced=${d?.forced === true} forcedReason=${d?.forcedReason || ''} ` +
+    `decision.base=${Number(d?.baseAmount || 0).toFixed(8)} decision.usd=${Number(d?.usdAmount || 0).toFixed(2)} ` +
+    `sizing.base=${Number(sizingPlan?.baseAmount || 0).toFixed(8)} sizing.usd=${Number(sizingPlan?.usdAmount || 0).toFixed(2)} ` +
+    `sizing.sellable=${Number(sizingPlan?.sellableCrypto || 0).toFixed(8)} coinAvailableReal=${Number(sizingPlan?.coinAvailableReal || 0).toFixed(8)} ` +
+    `availableByCurrency=${Number(realAvailableBalances?.availableByCurrency?.[baseCurrency] || 0).toFixed(8)} ` +
+    `totalsByCurrency=${Number(realAvailableBalances?.totalsByCurrency?.[baseCurrency] || 0).toFixed(8)} ` +
+    `reservedOpenSell=${Number(realAvailableBalances?.reserved?.cryptoInOpenSellLimitsByCurrency?.[baseCurrency] || 0).toFixed(8)} ` +
+    `symbolOpenOrders=${symbolOpenOrders.length}`
+  );
 }

@@ -23,7 +23,15 @@ function normalizeSide(side) {
 function isActiveOrder(order) {
   const status = String(order?.status || order?.state || '').toLowerCase();
   if (!status) return true;
-  return ![
+  const activeStatuses = new Set([
+    'open',
+    'pending',
+    'active',
+    'partially_filled',
+    'processing',
+    'created'
+  ]);
+  const inactiveStatuses = new Set([
     'filled',
     'executed',
     'cancelled',
@@ -32,7 +40,12 @@ function isActiveOrder(order) {
     'failed',
     'expired',
     'closed',
-  ].includes(status);
+    'done',
+    'skipped'
+  ]);
+  if (activeStatuses.has(status)) return true;
+  if (inactiveStatuses.has(status)) return false;
+  return true;
 }
 
 function getOrderType(order) {

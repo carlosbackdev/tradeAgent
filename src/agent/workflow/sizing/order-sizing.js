@@ -87,11 +87,54 @@ export function buildExecutableOrderSize({
   indicators,
   managedPositions = [],
   maxTradeSizePct = 25,
-  sellSizeBuffer = DEFAULT_SELL_SIZE_BUFFER
+  sellSizeBuffer = DEFAULT_SELL_SIZE_BUFFER,
+  tradingConfig = {}
 }) {
   const action = String(decision?.action || 'HOLD').toUpperCase();
   const normalizedSymbol = String(decision?.symbol || '').replace('/', '-').toUpperCase();
   const baseCurrency = normalizedSymbol.split('-')[0];
+  const currentPrice = Number(indicators?.[normalizedSymbol]?.currentPrice || 0);
+  const isForcedSell = action === 'SELL' && decision?.forced === true;
+  const forcedReason = String(decision?.forcedReason || '').toUpperCase();
+  const isForcedStopLoss = isForcedSell && forcedReason === 'STOP_LOSS';
+  const isForcedTakeProfit = isForcedSell && forcedReason === 'TAKE_PROFIT';
+  const takeProfitExitPct = normalizePositionPct(tradingConfig?.takeProfitExitPct ?? 100) || 100;
+
+  const availableHeld = Number(
+    realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
+    getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol)
+  );
+  const totalHeld = Number(realAvailableBalances?.totalsByCurrency?.[baseCurrency] ?? 0);
+  const coinAvailableRealForced = Math.max(0, availableHeld, totalHeld);
+
+  if (isForcedSell) {
+    if (currentPrice <= 0) {
+      throw new Error(`No current price for ${decision?.symbol}`);
+    }
+
+    const forcedPct = isForcedStopLoss ? 100 : (isForcedTakeProfit ? takeProfitExitPct : 100);
+    const forcedDecimal = forcedPct / 100;
+    const forcedSellable = coinAvailableRealForced;
+    const requestedBase = Number(decision?.baseAmount || 0);
+    const fallbackFromUsd = Number(decision?.usdAmount || 0) > 0 ? Number(decision.usdAmount) / currentPrice : 0;
+    const plannedBase = requestedBase > 0 ? requestedBase : fallbackFromUsd;
+    const targetBase = forcedSellable * forcedDecimal;
+    const chosenBase = isForcedStopLoss ? Math.max(targetBase, plannedBase) : targetBase;
+    const baseAmount = roundBaseSizeDown(Math.min(chosenBase, forcedSellable), BASE_SIZE_DECIMALS);
+    const usdAmount = estimateUsdValue(baseAmount, currentPrice);
+
+    return {
+      action,
+      effectivePositionPct: forcedPct,
+      positionPctDecimal: forcedDecimal,
+      usdAmount,
+      baseAmount,
+      coinAvailableReal: forcedSellable,
+      sellableCrypto: forcedSellable,
+      currentPrice,
+      baseCurrency
+    };
+  }
 
   const rawPositionPct = normalizePositionPct(decision?.positionPct ?? 0);
   if (rawPositionPct > 0) {
@@ -119,18 +162,13 @@ export function buildExecutableOrderSize({
     }
 
     if (action === 'SELL') {
-      const currentPrice = Number(indicators?.[normalizedSymbol]?.currentPrice || 0);
       if (currentPrice <= 0) {
         throw new Error(`No current price for ${decision?.symbol}`);
       }
 
       const managedPos = managedPositions.find((p) => String(p?.symbol || '').startsWith(baseCurrency + '-'));
       const coinManagedBalance = Number(managedPos?.qty || 0);
-      const coinAvailableReal = Number(
-        realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
-        getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol)
-      );
-
+      const coinAvailableReal = Math.max(0, availableHeld);
       const sellableCrypto = Math.min(coinManagedBalance, coinAvailableReal);
       const sellSize = buildSellSizeFromPositionPct({
         sellableCrypto,
@@ -152,17 +190,13 @@ export function buildExecutableOrderSize({
 
   const legacyUsdAmount = parseFloat(decision?.usdAmount);
   if (action === 'SELL' && (!Number.isFinite(legacyUsdAmount) || legacyUsdAmount <= 0)) {
-    const currentPrice = Number(indicators?.[normalizedSymbol]?.currentPrice || 0);
     if (currentPrice <= 0) {
       throw new Error(`No current price for ${decision?.symbol}`);
     }
 
     const managedPos = managedPositions.find((p) => String(p?.symbol || '').startsWith(baseCurrency + '-'));
     const coinManagedBalance = Number(managedPos?.qty || 0);
-    const coinAvailableReal = Number(
-      realAvailableBalances?.availableByCurrency?.[baseCurrency] ??
-      getAvailableCoinReal(balanceArray, openOrders, normalizedSymbol)
-    );
+    const coinAvailableReal = Math.max(0, availableHeld);
     const sellableCrypto = Math.min(coinManagedBalance, coinAvailableReal);
     const baseAmount = roundBaseSizeDown(
       applySellSafetyBuffer(sellableCrypto, sellSizeBuffer),
@@ -188,8 +222,9 @@ export function buildExecutableOrderSize({
     positionPctDecimal: rawPositionPct > 0 ? rawPositionPct / 100 : 0,
     usdAmount: Number.isFinite(legacyUsdAmount) ? Number(legacyUsdAmount.toFixed(2)) : 0,
     baseAmount: Number.isFinite(Number(decision?.baseAmount)) ? roundBaseSizeDown(decision.baseAmount, BASE_SIZE_DECIMALS) : null,
-    sellableCrypto: null,
-    currentPrice: Number(indicators?.[normalizedSymbol]?.currentPrice || 0),
+    coinAvailableReal: action === 'SELL' ? Math.max(0, availableHeld) : null,
+    sellableCrypto: action === 'SELL' ? Math.max(0, availableHeld) : null,
+    currentPrice,
     baseCurrency
   };
 }
