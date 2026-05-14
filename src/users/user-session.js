@@ -242,12 +242,11 @@ export class UserSession {
       logger.info(`⏰ [User: ${this.username}] Cron triggered: ${schedule}`);
       try {
         for (const coin of this.userConfig.trading.pairs) {
-          // Pass userConfig to executor so it uses this user's keys
-          await runAgentCycle('cron', coin, '', this.userConfig);
+          await this.runCronCycleWithRetry(coin);
         }
         await this.handlers.handleMenu();
       } catch (err) {
-        logger.error(`[User: ${this.username}] Cron cycle failed: ${err.message}`);
+        logger.error(`[User: ${this.username}] Cron cycle failed unexpectedly: ${err.message}`);
       }
     });
 
@@ -271,6 +270,44 @@ export class UserSession {
       schedule,
       next: enabled ? `Próximo ciclo según: ${schedule}` : 'Desactivado',
     };
+  }
+
+  isRetryableCronDataError(errorMessage = '') {
+    const msg = String(errorMessage || '').toLowerCase();
+    return (
+      msg.includes('no valid indicators computed') ||
+      msg.includes('not enough historical data') ||
+      msg.includes('not enough data')
+    );
+  }
+
+  async runCronCycleWithRetry(coin) {
+    const maxAttempts = 2;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        logger.info(`[User: ${this.username}] [${coin}] Cron attempt ${attempt}/${maxAttempts}`);
+        await runAgentCycle('cron', coin, '', this.userConfig);
+        return;
+      } catch (err) {
+        const message = err?.message || String(err);
+        const retryable = this.isRetryableCronDataError(message);
+
+        if (!retryable) {
+          logger.error(`[User: ${this.username}] [${coin}] Non-retryable cron error. Skipping coin: ${message}`);
+          return;
+        }
+
+        if (attempt < maxAttempts) {
+          logger.warn(`[User: ${this.username}] [${coin}] Data insufficient on attempt ${attempt}/${maxAttempts}. Retrying in 10s: ${message}`);
+          await new Promise(resolve => setTimeout(resolve, 10_000));
+          continue;
+        }
+
+        logger.warn(`[User: ${this.username}] [${coin}] Data insufficient on attempt ${attempt}/${maxAttempts}. Skipping coin: ${message}`);
+        return;
+      }
+    }
   }
 
   destroy() {

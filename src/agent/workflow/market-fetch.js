@@ -51,8 +51,14 @@ export async function fetchMarketData(coin, config) {
 
   const uniqueCrypto = [...new Set(cryptoHoldings)];
   const priceMap = {};
+  const usdStablecoins = new Set(['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD']);
 
   await Promise.all(uniqueCrypto.map(async (base) => {
+    if (usdStablecoins.has(base)) {
+      priceMap[base] = 1;
+      return;
+    }
+
     try {
       const ticker = await market.getTicker(`${base}-USD`);
       if (ticker?.last) priceMap[base] = Number(ticker.last);

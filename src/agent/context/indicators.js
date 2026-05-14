@@ -18,8 +18,9 @@ import {
  * indicator suite and return a flat object Model AI can reason about.
  */
 export function computeIndicators(closes, candles = null) {
-  if (closes.length < 26) {
-    return { error: 'Not enough data (need ≥26 closes)' };
+  const MIN_CLOSES = 26;
+  if (closes.length < MIN_CLOSES) {
+    return { error: `Not enough data (need ≥${MIN_CLOSES} closes, got ${closes.length})` };
   }
 
   const rsiValues = RSI.calculate({ values: closes, period: 14 });
